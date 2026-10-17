@@ -9,7 +9,7 @@ export class Input {
   constructor({ onButtonDown, onButtonUp }) {
     this.onButtonDown = onButtonDown;
     this.onButtonUp = onButtonUp;
-    this.pointers = new Map(); // id -> { x, ax, ay, at, btn }
+    this.pointers = new Map(); // id -> { x, y, ax, ay, at, btn }
     this.keys = new Set();
     this.swipes = [];
 
@@ -63,7 +63,7 @@ export class Input {
   down(id, x, y, target) {
     const btnEl = target && target.closest ? target.closest('[data-btn]') : null;
     const btn = btnEl ? btnEl.dataset.btn : null;
-    this.pointers.set(id, { x, ax: x, ay: y, at: performance.now(), btn, btnEl });
+    this.pointers.set(id, { x, y, ax: x, ay: y, at: performance.now(), btn, btnEl });
     if (btn) this.onButtonDown(btn, btnEl);
   }
 
@@ -71,6 +71,7 @@ export class Input {
     const p = this.pointers.get(id);
     if (!p || p.btn) return;
     p.x = x;
+    p.y = y;
     const now = performance.now();
     // Only fast flicks count: re-anchor slow drags.
     if (now - p.at > SWIPE_WINDOW_MS) {
@@ -95,19 +96,33 @@ export class Input {
     if (p.btn) this.onButtonUp(p.btn, p.btnEl);
   }
 
-  // Returns the current steering state and drains queued swipes.
+  // Returns what's being held and drains queued swipes.
+  // up/down/rollLeft/rollRight are keyboard-only holds for flips and rolls.
   poll() {
-    let left = this.keys.has('ArrowLeft') || this.keys.has('KeyA');
-    let right = this.keys.has('ArrowRight') || this.keys.has('KeyD');
+    const k = this.keys;
+    let left = k.has('ArrowLeft') || k.has('KeyA');
+    let right = k.has('ArrowRight') || k.has('KeyD');
+    const up = k.has('ArrowUp') || k.has('KeyW');
+    const down = k.has('ArrowDown') || k.has('KeyS');
+    const rollLeft = k.has('KeyQ');
+    const rollRight = k.has('KeyE');
+    // Where the finger on each side is, so the arrow buttons can follow it.
+    let leftPos = null;
+    let rightPos = null;
     const mid = window.innerWidth / 2;
     for (const p of this.pointers.values()) {
       if (p.btn) continue;
-      if (p.x < mid) left = true;
-      else right = true;
+      if (p.x < mid) {
+        left = true;
+        leftPos = p;
+      } else {
+        right = true;
+        rightPos = p;
+      }
     }
     const swipes = this.swipes;
     this.swipes = [];
-    return { left, right, swipes };
+    return { left, right, up, down, rollLeft, rollRight, leftPos, rightPos, swipes };
   }
 
   clear() {

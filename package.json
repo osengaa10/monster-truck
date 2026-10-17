@@ -1,0 +1,10 @@
+{
+  "name": "monster-truck",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A monster truck game for little kids, made for iPad/iPhone home screens.",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/serve.js"
+  }
+}

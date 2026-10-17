@@ -1,9 +1,10 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { Input } from './input.js';
-import { Truck, TRUCK_COLORS } from './truck.js';
+import { Truck, TRUCK_COLORS, EXHAUST_TIPS } from './truck.js';
 import { World } from './world.js';
 import { Effects } from './effects.js';
 import { Sfx } from './audio.js';
+import { truckSvg } from './truck-art.js';
 
 // ---------- Renderer / scene ----------
 
@@ -65,6 +66,8 @@ const hud = document.getElementById('hud');
 const pickEl = document.getElementById('pick');
 const starsEl = document.getElementById('stars');
 const starCountEl = document.getElementById('star-count');
+const scoreEl = document.getElementById('score');
+const scoreCountEl = document.getElementById('score-count');
 const arrowLeft = document.getElementById('arrow-left');
 const arrowRight = document.getElementById('arrow-right');
 const honkEl = document.getElementById('honk');
@@ -82,36 +85,46 @@ const store = {
 let stars = store.get('mt-stars', 0);
 starCountEl.textContent = stars;
 
+function bump(el) {
+  el.classList.remove('bump');
+  void el.offsetWidth; // restart the CSS animation
+  el.classList.add('bump');
+}
+
 function addStars(n) {
   const before = stars;
   stars += n;
   starCountEl.textContent = stars;
-  starsEl.classList.remove('bump');
-  void starsEl.offsetWidth;
-  starsEl.classList.add('bump');
+  bump(starsEl);
   store.set('mt-stars', stars);
   // Big party every 25 stars.
   if (Math.floor(stars / 25) > Math.floor(before / 25)) {
     setTimeout(() => {
       effects.fireworks(truck.pos);
       sfx.fanfare(true);
-      effects.showWow('🎉 ' + Math.floor(stars / 25) * 25 + ' 🎉', '⭐⭐⭐');
+      effects.showWow('🎉 ' + Math.floor(stars / 25) * 25 + ' 🎉', '', '⭐⭐⭐');
     }, 900);
   }
 }
 
-function truckSvg(c) {
-  const hex = (n) => '#' + n.toString(16).padStart(6, '0');
-  return `<svg viewBox="0 0 120 100">
-    <rect x="18" y="34" width="84" height="26" rx="6" fill="${hex(c.body)}"/>
-    <rect x="18" y="48" width="84" height="6" fill="${hex(c.accent)}"/>
-    <rect x="40" y="14" width="42" height="24" rx="5" fill="${hex(c.body)}"/>
-    <rect x="46" y="19" width="30" height="14" rx="3" fill="#9fe3ff"/>
-    <circle cx="55" cy="26" r="4.5" fill="#fff"/><circle cx="67" cy="26" r="4.5" fill="#fff"/>
-    <circle cx="56" cy="27" r="2.2" fill="#111"/><circle cx="68" cy="27" r="2.2" fill="#111"/>
-    <circle cx="34" cy="70" r="19" fill="#1d1d1d"/><circle cx="34" cy="70" r="8" fill="#ccc"/>
-    <circle cx="86" cy="70" r="19" fill="#1d1d1d"/><circle cx="86" cy="70" r="8" fill="#ccc"/>
-  </svg>`;
+// Points only ever go up, and are remembered between visits.
+let score = store.get('mt-score', 0);
+let shownScore = score;
+const fmt = (n) => Math.floor(n).toLocaleString('en-US');
+scoreCountEl.textContent = fmt(score);
+
+function addPoints(n, pos, label = '', color = '#fff') {
+  score += n;
+  store.set('mt-score', score);
+  bump(scoreEl);
+  effects.popup('+' + fmt(n) + (label ? ' ' + label : ''), pos, camera, color);
+}
+
+// Animate the counter rolling up to the real score.
+function updateScore(dt) {
+  if (shownScore >= score) return;
+  shownScore = Math.min(score, shownScore + Math.max(1, (score - shownScore) * Math.min(1, dt * 5)));
+  scoreCountEl.textContent = fmt(shownScore);
 }
 
 const choicesEl = document.getElementById('truck-choices');
@@ -120,7 +133,7 @@ TRUCK_COLORS.forEach((c, i) => {
   b.className = 'truck-btn';
   b.dataset.btn = 'pick';
   b.dataset.index = i;
-  b.innerHTML = truckSvg(c);
+  b.innerHTML = truckSvg(c, i);
   choicesEl.appendChild(b);
 });
 truck.setColors(TRUCK_COLORS[store.get('mt-truck', 0)] || TRUCK_COLORS[0]);
@@ -132,6 +145,9 @@ let garageTimer = null;
 let wallCooldown = 0;
 let shake = 0;
 let elapsed = 0;
+let crushStreak = 0;
+let lastCrush = -10;
+let smokeTimer = 0;
 
 function startGame(index) {
   sfx.init();
@@ -187,12 +203,24 @@ for (const ev of ['touchend', 'mouseup', 'keydown']) {
 
 const BIG_WORDS = ['', 'WOW!', 'SUPER!', 'AMAZING!', 'INCREDIBLE!'];
 const EMOJI = ['🤩', '🔥', '🚀', '🌈', '💥', '🎉'];
+const TIMES = ['', '', 'DOUBLE ', 'TRIPLE ', 'QUADRUPLE '];
+const times = (n) => (n < TIMES.length ? TIMES[n] : 'MEGA ');
+
+// e.g. { flips: 2, spins: -1 } -> ['DOUBLE BACKFLIP', '360 SPIN']
+function trickNames({ flips, spins, rolls }) {
+  const names = [];
+  if (flips) names.push(times(Math.abs(flips)) + (flips > 0 ? 'BACKFLIP' : 'FRONT FLIP'));
+  if (spins) names.push(360 * Math.abs(spins) + ' SPIN');
+  if (rolls) names.push(times(Math.abs(rolls)) + 'BARREL ROLL');
+  return names;
+}
 
 function handleEvent(ev) {
   switch (ev.type) {
     case 'launch':
       sfx.whoosh();
       effects.dustBurst(truck.pos, 16, 6);
+      for (const t of EXHAUST_TIPS) effects.smoke(truck.mesh.localToWorld(t.clone()), true);
       if (ev.mega) effects.showWow('🚀', 'MEGA JUMP!');
       break;
     case 'hop':
@@ -210,33 +238,51 @@ function handleEvent(ev) {
       sfx.thud(strength);
       effects.dustBurst(truck.pos, 8 + Math.round(strength * 20), 4 + strength * 6);
       shake = Math.max(shake, strength * 0.9);
-      const spins = Math.floor(ev.spins + 0.25);
-      if (spins >= 1) {
-        const reward = spins + 1;
+      if (!playing) break;
+      const names = trickNames(ev);
+      const total = Math.abs(ev.flips) + Math.abs(ev.spins) + Math.abs(ev.rolls);
+      const airPoints = ev.airTime > 0.8 ? Math.round(ev.airTime * 10) * 10 : 0;
+      if (total >= 1) {
+        // Tricks score big, and mixing different tricks doubles it.
+        const combo = names.length > 1 ? 2 : 1;
+        const points = 500 * total * total * combo + airPoints;
+        const reward = total + 1;
         addStars(reward);
-        sfx.fanfare(spins >= 3);
-        effects.confettiBurst(truck.pos, Math.min(80 + 40 * spins, 300));
-        const word = BIG_WORDS[Math.min(spins, BIG_WORDS.length - 1)];
+        addPoints(points, truck.pos, '', '#ffe14d');
+        sfx.fanfare(total >= 3);
+        effects.confettiBurst(truck.pos, Math.min(80 + 40 * total, 300));
+        const word = BIG_WORDS[Math.min(total, BIG_WORDS.length - 1)];
         const emoji = EMOJI[(Math.random() * EMOJI.length) | 0];
-        effects.showWow(`${emoji} ${word} ${emoji}`, '+' + reward + ' ⭐');
-      } else if (ev.airTime > 1.4) {
-        addStars(1);
-        effects.sparkle(truck.pos);
+        const trick = names.join(' + ') + (combo > 1 ? ' COMBO!' : '!');
+        effects.showWow(`${emoji} ${word} ${emoji}`, trick, '+' + fmt(points) + ' ⭐+' + reward);
+      } else if (airPoints) {
+        addPoints(airPoints, truck.pos, 'AIR');
+        if (ev.airTime > 1.4) {
+          addStars(1);
+          effects.sparkle(truck.pos);
+        }
       }
       break;
     }
     case 'crush':
       sfx.crunch();
       effects.dustBurst(ev.pos, 18, 7);
-      effects.sparkle(ev.pos);
+      effects.glass(ev.pos);
       truck.bump(5);
       shake = Math.max(shake, 0.35);
-      if (playing) addStars(1);
+      if (!playing) break;
+      // Crushing cars one after another builds a combo.
+      crushStreak = elapsed - lastCrush < 2 ? crushStreak + 1 : 1;
+      lastCrush = elapsed;
+      addStars(1);
+      addPoints(100 * crushStreak, ev.pos, crushStreak > 1 ? 'x' + crushStreak : '', '#ff9f43');
       break;
     case 'star':
       sfx.pop();
       effects.sparkle(ev.pos);
-      if (playing) addStars(1);
+      if (!playing) break;
+      addStars(1);
+      addPoints(50, ev.pos, '', '#ffe14d');
       break;
   }
 }
@@ -303,6 +349,19 @@ function updateCamera(dt) {
   sun.target.position.copy(truck.pos);
 }
 
+// The steering arrow jumps under the finger, then goes back to its corner.
+function placeArrow(el, pos) {
+  if (pos) {
+    el.style.left = pos.x + 'px';
+    el.style.top = pos.y + 'px';
+    el.style.right = el.style.bottom = 'auto';
+    el.classList.add('follow');
+  } else if (el.classList.contains('follow')) {
+    el.removeAttribute('style');
+    el.classList.remove('follow');
+  }
+}
+
 // ---------- Main loop ----------
 
 const NO_INPUT = { left: false, right: false, swipes: [] };
@@ -331,11 +390,19 @@ function frame(now) {
   if (!playing) input.clear();
   arrowLeft.classList.toggle('on', state.left);
   arrowRight.classList.toggle('on', state.right);
+  placeArrow(arrowLeft, state.leftPos);
+  placeArrow(arrowRight, state.rightPos);
 
   for (const ev of truck.update(dt, state, world)) handleEvent(ev);
   for (const ev of world.update(dt, truck)) handleEvent(ev);
   effects.trail(truck, dt);
-  effects.update(dt);
+  smokeTimer -= dt;
+  if (smokeTimer <= 0) {
+    smokeTimer = truck.airborne ? 0.08 : 0.15;
+    truck.mesh.updateMatrixWorld();
+    for (const t of EXHAUST_TIPS) effects.smoke(truck.mesh.localToWorld(t.clone()));
+  }
+  effects.update(dt, camera.position);
   sfx.setEngine(truck.speed / 24, truck.airborne);
 
   const ground = world.heightAt(truck.distance);
@@ -345,6 +412,7 @@ function frame(now) {
   shadow.scale.setScalar(1 + h * 0.04);
   shadow.material.opacity = Math.max(0.25, 1 - h * 0.05);
 
+  updateScore(dt);
   updateSky();
   updateCamera(dt);
   renderer.render(scene, camera);

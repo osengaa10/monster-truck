@@ -1,4 +1,5 @@
 import * as THREE from '../vendor/three.module.min.js';
+import { makeCar, CAR_COLORS, CAR_VARIANT_COUNT } from './cars.js';
 
 // The track runs along -Z. "Distance" d = -z. Track spans x in [-WALL_X, WALL_X].
 export const WALL_X = 14;
@@ -9,7 +10,6 @@ const AHEAD = 450;
 const BEHIND = 60;
 const SNAP = 8;
 
-const CAR_COLORS = [0xff6f91, 0x4dd0e1, 0xffb74d, 0x9ccc65, 0xba68c8, 0xfff176, 0x7986cb];
 const BALLOON_COLORS = [0xff4d4d, 0xffd93d, 0x4dabff, 0x6bff8a, 0xff7ae0, 0xffa94d];
 
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -91,13 +91,6 @@ export class World {
     this.starGeo = new THREE.ExtrudeGeometry(starShape(), { depth: 0.4, bevelEnabled: false });
     this.starGeo.center();
     this.starMat = new THREE.MeshPhongMaterial({ color: 0xffdd00, emissive: 0xb07a00, shininess: 100, flatShading: true });
-
-    this.carBodyGeo = new THREE.BoxGeometry(2.3, 0.9, 4.2);
-    this.carCabGeo = new THREE.BoxGeometry(1.9, 0.75, 2.1);
-    this.carWheelGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.4, 10).rotateZ(Math.PI / 2);
-    this.carCabMat = new THREE.MeshPhongMaterial({ color: 0xcff4ff, shininess: 100 });
-    this.carWheelMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
-    this.carMats = CAR_COLORS.map((c) => new THREE.MeshPhongMaterial({ color: c, shininess: 70, flatShading: true }));
 
     this.trunkGeo = new THREE.CylinderGeometry(0.5, 0.7, 3, 6);
     this.leafGeo = new THREE.ConeGeometry(3, 7, 7);
@@ -265,19 +258,9 @@ export class World {
   addCarRow(seg, d, fill) {
     for (const x of [-10.5, -5.2, 0, 5.2, 10.5]) {
       if (Math.random() > fill) continue;
-      const car = new THREE.Group();
-      const bodyMesh = new THREE.Mesh(this.carBodyGeo, pick(this.carMats));
-      bodyMesh.position.y = 0.9;
-      const cab = new THREE.Mesh(this.carCabGeo, this.carCabMat);
-      cab.position.set(0, 1.7, 0.2);
-      car.add(bodyMesh, cab);
-      for (const [wx, wz] of [[-1.15, -1.3], [1.15, -1.3], [-1.15, 1.3], [1.15, 1.3]]) {
-        const w = new THREE.Mesh(this.carWheelGeo, this.carWheelMat);
-        w.position.set(wx, 0.45, wz);
-        car.add(w);
-      }
+      const car = makeCar((Math.random() * CAR_COLORS.length) | 0, (Math.random() * CAR_VARIANT_COUNT) | 0);
       car.position.set(x + rand(-0.5, 0.5), 0, -d);
-      car.rotation.y = rand(-0.15, 0.15);
+      car.rotation.y = (Math.random() < 0.5 ? 0 : Math.PI) + rand(-0.15, 0.15);
       this.scene.add(car);
       seg.objects.push(car);
       seg.cars.push({ mesh: car, x: car.position.x, d, crushed: false, t: 0 });
@@ -398,11 +381,13 @@ export class World {
           if (c.t < 1) {
             c.t = Math.min(1, c.t + dt * 8);
             c.mesh.scale.set(1 + c.t * 0.25, 1 - c.t * 0.72, 1 + c.t * 0.1);
+            c.mesh.rotation.z = c.t * c.tilt;
           }
           continue;
         }
         if (Math.abs(c.x - truck.pos.x) < 2.9 && Math.abs(c.d - truckD) < 3.8 && truck.pos.y < 2.2) {
           c.crushed = true;
+          c.tilt = rand(-0.2, 0.2);
           events.push({ type: 'crush', pos: c.mesh.position.clone() });
         }
       }

@@ -49,7 +49,62 @@ html, body {
   font-weight: 900;
   text-shadow: 0 3px 0 rgba(0, 0, 0, 0.35);
 }
-#stars.bump { animation: bump 0.35s ease-out; }
+#stars.bump, #score.bump { animation: bump 0.35s ease-out; }
+
+#score {
+  position: absolute;
+  top: calc(env(safe-area-inset-top) + 12px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 20px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.35);
+  font-size: 40px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  color: #ffe14d;
+  text-shadow: 0 3px 0 rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+}
+#score.bump { animation: bump-center 0.35s ease-out; }
+@keyframes bump-center {
+  0% { transform: translateX(-50%) scale(1); }
+  40% { transform: translateX(-50%) scale(1.25); }
+  100% { transform: translateX(-50%) scale(1); }
+}
+/* Phones held upright: shrink the counters so they don't collide. */
+@media (max-width: 600px) {
+  #stars, #score { font-size: 26px; padding: 4px 12px; }
+  #score { top: calc(env(safe-area-inset-top) + 70px); }
+}
+
+/* Floating "+100" points */
+#popups {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.popup {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-size: clamp(28px, 5vw, 52px);
+  font-weight: 900;
+  white-space: nowrap;
+  -webkit-text-stroke: 2px rgba(0, 0, 0, 0.6);
+  text-shadow: 0 4px 0 rgba(0, 0, 0, 0.35);
+  animation: popup 1.2s ease-out forwards;
+}
+@keyframes popup {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.4); }
+  15% { opacity: 1; transform: translate(-50%, -60%) scale(1.2); }
+  30% { transform: translate(-50%, -70%) scale(1); }
+  80% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -260%) scale(1); }
+}
 @keyframes bump {
   0% { transform: scale(1); }
   40% { transform: scale(1.35); }
@@ -69,7 +124,7 @@ html, body {
   color: rgba(255, 255, 255, 0.85);
   background: rgba(0, 0, 0, 0.18);
   border: 5px solid rgba(255, 255, 255, 0.45);
-  transition: transform 0.08s, background 0.08s;
+  transition: background 0.08s, border-color 0.08s;
 }
 #arrow-left { left: calc(env(safe-area-inset-left) + 20px); }
 #arrow-right { right: calc(env(safe-area-inset-right) + 20px); }
@@ -77,6 +132,15 @@ html, body {
   background: rgba(255, 200, 0, 0.75);
   border-color: #fff;
   transform: scale(1.12);
+}
+/* Under the finger: centered on the touch, a bit bigger so it peeks out around it. */
+.arrow.follow {
+  width: 150px;
+  height: 150px;
+  font-size: 70px;
+  transform: translate(-50%, -50%);
+  background: rgba(255, 200, 0, 0.6);
+  box-shadow: 0 0 0 8px rgba(255, 255, 255, 0.35);
 }
 
 #honk {
@@ -147,6 +211,14 @@ html, body {
   text-shadow: 0 8px 0 #ff3d7f, 0 14px 20px rgba(0, 0, 0, 0.35);
   opacity: 0;
 }
+#wow .trick {
+  display: block;
+  margin-top: 10px;
+  padding: 0 16px;
+  font-size: 0.45em;
+  -webkit-text-stroke: 3px #1e63d6;
+  text-shadow: 0 6px 0 #1e63d6;
+}
 #wow .sub {
   display: block;
   margin-top: 12px;
@@ -201,10 +273,10 @@ html, body {
   max-width: 100%;
 }
 .truck-btn {
-  width: clamp(120px, 20vmin, 200px);
+  width: clamp(130px, 22vmin, 220px);
   aspect-ratio: 1;
   border-radius: 28px;
-  background: #fff;
+  background: linear-gradient(#bfe9ff 0 70%, #e9cf9c 70%);
   border: 6px solid #fff;
   box-shadow: 0 8px 0 rgba(0, 0, 0, 0.25);
   display: flex;
@@ -216,7 +288,7 @@ html, body {
 .truck-btn:nth-child(2) { animation-delay: 0.15s; }
 .truck-btn:nth-child(3) { animation-delay: 0.3s; }
 .truck-btn:nth-child(4) { animation-delay: 0.45s; }
-.truck-btn svg { width: 90%; height: 90%; }
+.truck-btn svg { width: 94%; height: 94%; }
 .truck-btn.on { transform: scale(0.9); }
 @keyframes bounce {
   0%, 100% { transform: translateY(0); }

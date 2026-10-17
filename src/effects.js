@@ -49,7 +49,9 @@ class Pool {
     this.mesh.instanceColor.needsUpdate = true;
   }
 
-  update(dt) {
+  // Particles shrink away as they get near the camera, so the camera
+  // never flies through a giant blob of dust or smoke.
+  update(dt, camPos) {
     const drag = Math.exp(-this.drag * dt);
     let dirty = false;
     for (let i = 0; i < this.max; i++) {
@@ -69,8 +71,9 @@ class Pool {
         this.rot[k + j] += this.spin[k + j] * dt;
       }
       const t = this.life[i] / this.maxLife[i];
-      const sc = this.size[i] * (this.grow ? (1 + (1 - t) * 1.2) * Math.min(1, t * 3) : Math.min(1, t * 4));
       _p.set(this.pos[k], this.pos[k + 1], this.pos[k + 2]);
+      const near = THREE.MathUtils.clamp((_p.distanceTo(camPos) - 5) / 7, 0, 1);
+      const sc = near * this.size[i] * (this.grow ? (1 + (1 - t) * 1.2) * Math.min(1, t * 3) : Math.min(1, t * 4));
       _q.setFromEuler(_e.set(this.rot[k], this.rot[k + 1], this.rot[k + 2]));
       _s.set(sc, sc, sc);
       this.mesh.setMatrixAt(i, _m.compose(_p, _q, _s));
@@ -96,6 +99,7 @@ export class Effects {
       { gravity: -1.5, drag: 2.5, grow: true },
     );
     this.wowEl = document.getElementById('wow');
+    this.popupLayer = document.getElementById('popups');
   }
 
   confettiBurst(pos, n = 120, speed = 16, colors = CONFETTI_COLORS) {
@@ -108,6 +112,23 @@ export class Effects {
         colors[(Math.random() * colors.length) | 0], 0.8 + Math.random() * 0.6, 2 + Math.random() * 1.5,
       );
     }
+  }
+
+  // Shattering windows when a car gets crushed.
+  glass(pos) {
+    for (let i = 0; i < 30; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = 3 + Math.random() * 6;
+      this.confetti.spawn(pos.x, pos.y + 1.6, pos.z, Math.cos(a) * r, 5 + Math.random() * 7, Math.sin(a) * r,
+        Math.random() < 0.6 ? 0x8fdcff : 0xffffff, 0.5 + Math.random() * 0.4, 0.8 + Math.random() * 0.5);
+    }
+  }
+
+  // A grey puff from an exhaust stack.
+  smoke(pos, big = false) {
+    const shade = 0x8a + ((Math.random() * 0x38) | 0);
+    this.dust.spawn(pos.x, pos.y, pos.z, (Math.random() - 0.5) * 1.5, 3 + Math.random() * 2, 1,
+      (shade << 16) | (shade << 8) | shade, big ? 0.6 : 0.32, big ? 0.8 : 0.45);
   }
 
   sparkle(pos) {
@@ -150,16 +171,34 @@ export class Effects {
     }
   }
 
-  showWow(text, sub = '') {
+  // Floating "+100" text at a spot in the 3D world.
+  popup(text, worldPos, camera, color = '#fff') {
+    const v = worldPos.clone();
+    v.y += 4;
+    v.project(camera);
+    if (v.z > 1) return; // behind the camera
+    const el = document.createElement('div');
+    el.className = 'popup';
+    el.textContent = text;
+    el.style.color = color;
+    el.style.left = ((v.x + 1) / 2) * 100 + '%';
+    el.style.top = ((1 - v.y) / 2) * 100 + '%';
+    this.popupLayer.appendChild(el);
+    setTimeout(() => el.remove(), 1200);
+  }
+
+  showWow(text, trick = '', sub = '') {
     const el = this.wowEl;
-    el.innerHTML = text + (sub ? `<span class="sub">${sub}</span>` : '');
+    el.innerHTML = text
+      + (trick ? `<span class="trick">${trick}</span>` : '')
+      + (sub ? `<span class="sub">${sub}</span>` : '');
     el.classList.remove('show');
     void el.offsetWidth; // restart the CSS animation
     el.classList.add('show');
   }
 
-  update(dt) {
-    this.confetti.update(dt);
-    this.dust.update(dt);
+  update(dt, camPos) {
+    this.confetti.update(dt, camPos);
+    this.dust.update(dt, camPos);
   }
 }
