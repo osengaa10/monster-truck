@@ -1,6 +1,6 @@
 import * as THREE from '../vendor/three.module.min.js';
-import { WALL_X } from './world.js';
-import { Parts } from './parts.js';
+import { WALL_X, GRAVITY, SPEED } from './consts.js';
+import { Parts, mat, makeMaterial } from './parts.js';
 
 export const TRUCK_COLORS = [
   { body: 0xe53935, accent: 0xffd600 },
@@ -9,8 +9,11 @@ export const TRUCK_COLORS = [
   { body: 0x8e24aa, accent: 0x00e5ff },
 ];
 
-const CRUISE_SPEED = 24;
-const GRAVITY = 14;        // low "moon" gravity = big, floaty air time
+const CRUISE_SPEED = SPEED;
+const MOON_GRAVITY = 0.45; // gravity multiplier with the moon power-up
+const NITRO_SPEED = 1.3;
+const NITRO_LAUNCH = 1.25;
+const GIANT_SCALE = 1.6;
 const MAX_HEADING = 1.0;   // radians; can never turn around
 const STEER_RATE = 1.7;
 const AIR_STEER_RATE = 0.8;
@@ -29,12 +32,13 @@ const UP = new THREE.Vector3(0, 1, 0);
 const X_AXIS = new THREE.Vector3(1, 0, 0);
 const IDENTITY = new THREE.Quaternion();
 
-const DARK = 0x2a2a2a;
-const CHROME = 0xd8dde3;
-const GLASS = 0x8fdcff;
-const LIGHT = 0xfff3a0;
-const RED = 0xff2a2a;
-const TIRE = 0x1c1c1c;
+const DARK = mat(0x2a2a2a, 'metal');
+const CHROME = mat(0xd8dde3, 'chrome');
+const GLASS = mat(0x2a3a48, 'glass');
+const LIGHT = mat(0xfff6d0, 'light');
+const RED = mat(0xff2a2a, 'light');
+const TIRE = mat(0x1c1c1c, 'rubber');
+const RIM = mat(0x9aa3ad, 'chrome');
 
 // Smoke comes out of the tops of the exhaust stacks (truck-local coordinates).
 export const EXHAUST_TIPS = [new THREE.Vector3(-0.7, 4.6, 1.65), new THREE.Vector3(0.7, 4.6, 1.65)];
@@ -90,66 +94,82 @@ function flameTexture() {
 function bodyGeometry(B, A) {
   const Y = -WHEEL_R;
   const p = new Parts();
-  // Chassis rails and cross members.
-  p.box(0.3, 0.3, 5.4, DARK, -0.9, 1.4 + Y, 0).box(0.3, 0.3, 5.4, DARK, 0.9, 1.4 + Y, 0);
-  for (const z of [-1.9, 0, 1.9]) p.box(1.8, 0.25, 0.3, DARK, 0, 1.4 + Y, z);
-  // Main body, stripe, hood with scoop.
-  p.box(3.0, 0.9, 4.6, B, 0, 2.3 + Y, 0);
-  p.box(3.04, 0.2, 4.64, A, 0, 1.95 + Y, 0);
-  p.box(2.8, 0.3, 1.6, B, 0, 2.85 + Y, -1.5, -0.1);
-  p.box(1.0, 0.32, 0.9, DARK, 0, 3.1 + Y, -1.45);
-  p.box(0.9, 0.22, 0.06, CHROME, 0, 3.1 + Y, -1.92);
-  // Cab, roof stripe, windows.
-  p.box(2.6, 1.05, 2.2, B, 0, 3.3 + Y, 0.4);
-  p.box(2.66, 0.14, 2.1, A, 0, 3.88 + Y, 0.4);
-  p.box(2.2, 0.7, 0.06, GLASS, 0, 3.35 + Y, -0.72);
-  p.box(0.06, 0.6, 1.5, GLASS, -1.31, 3.38 + Y, 0.35).box(0.06, 0.6, 1.5, GLASS, 1.31, 3.38 + Y, 0.35);
-  p.box(2.1, 0.55, 0.06, GLASS, 0, 3.4 + Y, 1.52);
-  p.box(0.04, 0.5, 0.06, DARK, -1.33, 3.0 + Y, 0.2).box(0.04, 0.5, 0.06, DARK, 1.33, 3.0 + Y, 0.2); // door seams
-  p.box(0.06, 0.06, 0.3, CHROME, -1.34, 3.05 + Y, 0.7).box(0.06, 0.06, 0.3, CHROME, 1.34, 3.05 + Y, 0.7); // handles
+  const v = (x, y, z) => new THREE.Vector3(x, y + Y, z);
+  // Tube frame rails and cross members.
+  for (const x of [-0.9, 0.9]) p.tube(0.13, v(x, 1.45, -2.6), v(x, 1.45, 2.6), 8, DARK);
+  for (const z of [-2.3, -0.6, 0.9, 2.3]) p.tube(0.1, v(-0.9, 1.45, z), v(0.9, 1.45, z), 8, DARK);
+  // Fiberglass body: lower body with hood, then the cab on top.
+  p.profile([[-2.35, 1.85], [2.35, 1.85], [2.45, 2.15], [2.42, 2.62], [1.0, 2.86], [-2.3, 2.8], [-2.42, 2.2]], 3.0, B, { y: Y, bevel: 0.12 });
+  p.box(3.06, 0.16, 4.72, A, 0, 1.98 + Y, 0); // accent stripe along the bottom edge
+  p.profile([[0.78, 2.8], [0.66, 3.85], [-1.32, 3.88], [-1.48, 2.8]], 2.6, B, { y: Y, bevel: 0.1 });
+  p.box(2.5, 0.08, 1.7, A, 0, 3.98 + Y, 0.35); // roof stripe
+  // Windows: windshield, side glass (sticks out a hair past the cab sides), rear.
+  p.box(2.2, 0.82, 0.05, GLASS, 0, 3.33 + Y, -0.84, 0.11);
+  p.profile([[0.6, 3.0], [0.52, 3.68], [-1.15, 3.7], [-1.28, 3.0]], 2.66, GLASS, { y: Y, bevel: 0.01 });
+  p.box(2.0, 0.6, 0.05, GLASS, 0, 3.38 + Y, 1.6);
+  for (const s of [-1, 1]) {
+    p.box(0.04, 0.85, 0.06, DARK, s * 1.34, 3.05 + Y, 0.2); // door seam
+    p.box(0.06, 0.06, 0.3, CHROME, s * 1.36, 3.15 + Y, 0.6); // handle
+    p.box(0.42, 0.07, 0.07, DARK, s * 1.5, 3.25 + Y, -0.55); // mirror arm
+    p.box(0.12, 0.34, 0.26, B, s * 1.74, 3.3 + Y, -0.55);
+  }
+  // Supercharger poking out of the hood, with an air scoop on top.
+  p.box(0.9, 0.22, 0.8, CHROME, 0, 2.95 + Y, -1.5);
+  for (const x of [-0.27, 0, 0.27]) p.box(0.07, 0.24, 0.76, DARK, x, 2.96 + Y, -1.5);
+  p.profile([[-0.42, 3.06], [0.48, 3.06], [0.38, 3.2], [-0.38, 3.26]], 0.8, B, { y: Y, z: -1.5, bevel: 0.04 });
+  p.box(0.6, 0.12, 0.05, DARK, 0, 3.14 + Y, -1.96);
   // Roof light bar.
   p.box(2.2, 0.16, 0.35, DARK, 0, 4.03 + Y, -0.35);
-  for (const x of [-0.75, -0.25, 0.25, 0.75]) p.box(0.38, 0.24, 0.22, LIGHT, x, 4.17 + Y, -0.42);
-  // Pickup bed, tailgate, roll bar.
-  p.box(0.14, 0.5, 0.8, B, -1.43, 3.0 + Y, 1.9).box(0.14, 0.5, 0.8, B, 1.43, 3.0 + Y, 1.9);
-  p.box(3.0, 0.5, 0.14, B, 0, 3.0 + Y, 2.23);
-  p.ycyl(0.08, 0.9, 6, CHROME, -1.1, 3.55 + Y, 1.62).ycyl(0.08, 0.9, 6, CHROME, 1.1, 3.55 + Y, 1.62);
-  p.xcyl(0.08, 2.28, 6, CHROME, 0, 4.0 + Y, 1.62);
+  for (const x of [-0.75, -0.25, 0.25, 0.75]) p.box(0.38, 0.22, 0.06, LIGHT, x, 4.05 + Y, -0.54);
+  // Pickup bed: floor, rails, tailgate, roll bar.
+  p.box(2.7, 0.08, 1.5, DARK, 0, 2.82 + Y, 1.6);
+  for (const s of [-1, 1]) p.box(0.12, 0.38, 1.6, B, s * 1.42, 3.0 + Y, 1.55);
+  p.box(3.0, 0.4, 0.12, B, 0, 2.98 + Y, 2.46);
+  p.ycyl(0.08, 0.9, 8, CHROME, -1.1, 3.55 + Y, 1.62).ycyl(0.08, 0.9, 8, CHROME, 1.1, 3.55 + Y, 1.62);
+  p.xcyl(0.08, 2.28, 8, CHROME, 0, 4.0 + Y, 1.62);
   // Exhaust stacks.
   for (const t of EXHAUST_TIPS) {
-    p.ycyl(0.15, 1.75, 10, CHROME, t.x, 3.65 + Y, t.z);
-    p.ycyl(0.18, 0.16, 10, DARK, t.x, 4.5 + Y, t.z);
+    p.ycyl(0.15, 1.75, 12, CHROME, t.x, 3.65 + Y, t.z);
+    p.ycyl(0.18, 0.16, 12, DARK, t.x, 4.5 + Y, t.z);
   }
   // Grille, headlights, tail lights.
-  p.box(2.0, 0.65, 0.08, CHROME, 0, 2.3 + Y, -2.33);
-  for (let x = -0.8; x <= 0.81; x += 0.4) p.box(0.1, 0.5, 0.05, DARK, x, 2.3 + Y, -2.38);
+  p.box(2.0, 0.6, 0.08, CHROME, 0, 2.35 + Y, -2.58);
+  for (let x = -0.8; x <= 0.81; x += 0.2) p.box(0.06, 0.48, 0.05, DARK, x, 2.35 + Y, -2.63);
   for (const x of [-1.12, 1.12]) {
-    p.box(0.6, 0.45, 0.06, CHROME, x, 2.45 + Y, -2.32);
-    p.box(0.46, 0.32, 0.06, LIGHT, x, 2.45 + Y, -2.36);
-    p.box(0.45, 0.3, 0.06, RED, x, 2.45 + Y, 2.33);
+    p.box(0.58, 0.4, 0.06, CHROME, x, 2.4 + Y, -2.57);
+    p.box(0.46, 0.3, 0.06, LIGHT, x, 2.4 + Y, -2.61);
+    p.box(0.42, 0.3, 0.06, RED, x, 2.45 + Y, 2.56);
   }
-  // Bumpers, side steps, mirrors.
-  p.box(3.3, 0.35, 0.4, CHROME, 0, 1.8 + Y, -2.5).box(3.3, 0.35, 0.4, CHROME, 0, 1.8 + Y, 2.5);
-  for (const x of [-1.2, -0.4, 0.4, 1.2]) p.box(0.12, 0.12, 0.06, DARK, x, 1.8 + Y, -2.72);
-  p.box(0.3, 0.1, 1.4, DARK, -1.6, 1.95 + Y, 0.4).box(0.3, 0.1, 1.4, DARK, 1.6, 1.95 + Y, 0.4);
-  for (const s of [-1, 1]) {
-    p.box(0.4, 0.08, 0.08, DARK, s * 1.48, 3.25 + Y, -0.55);
-    p.box(0.12, 0.38, 0.28, B, s * 1.72, 3.3 + Y, -0.55);
-    p.box(0.02, 0.3, 0.2, CHROME, s * 1.72, 3.3 + Y, -0.7);
+  // Tube bumpers front and back.
+  for (const z of [-2.85, 2.75]) {
+    p.tube(0.1, v(-1.6, 1.8, z), v(1.6, 1.8, z), 10, CHROME);
+    p.tube(0.08, v(-1.2, 1.8, z), v(-0.9, 1.45, z * 0.9), 8, CHROME);
+    p.tube(0.08, v(1.2, 1.8, z), v(0.9, 1.45, z * 0.9), 8, CHROME);
   }
+  // Side steps.
+  p.box(0.3, 0.08, 1.4, DARK, -1.62, 1.95 + Y, 0.4).box(0.3, 0.08, 1.4, DARK, 1.62, 1.95 + Y, 0.4);
   return p.build();
 }
 
-// Axles and shocks: they stay put while the body squashes.
+// Axles, links and shocks: they stay put while the body squashes.
 function chassisGeometry(A) {
   const p = new Parts();
+  const v = (x, y, z) => new THREE.Vector3(x, y, z);
   for (const z of [-1.9, 1.9]) {
-    p.xcyl(0.15, 3.6, 8, DARK, 0, WHEEL_R, z);
-    p.box(0.9, 0.5, 0.5, DARK, 0, WHEEL_R, z); // differential
+    // Axle housing and differential.
+    p.xcyl(0.17, 3.5, 10, DARK, 0, WHEEL_R, z);
+    p.add(new THREE.SphereGeometry(0.42, 12, 8), DARK, 0.2, WHEEL_R, z);
+    // 4-link bars from the axle up to the frame.
+    const dir = -Math.sign(z);
+    for (const x of [-0.75, 0.75]) p.tube(0.07, v(x, WHEEL_R - 0.1, z), v(x * 0.9, 1.35, z + dir * 1.1), 8, CHROME);
+    p.tube(0.06, v(-0.3, WHEEL_R + 0.25, z), v(-0.6, 1.45, z + dir * 0.9), 8, CHROME);
+    p.tube(0.06, v(0.3, WHEEL_R + 0.25, z), v(0.6, 1.45, z + dir * 0.9), 8, CHROME);
+    // Two nitrogen shocks per corner: colored body, chrome shaft, reservoir.
     for (const s of [-1, 1]) {
-      for (const dz of [-0.35, 0.35]) {
-        p.ycyl(0.07, 1.0, 6, CHROME, s * 1.45, 1.55, z + dz, 0, 0, s * 0.25);
-        p.ycyl(0.17, 0.55, 8, A, s * 1.4, 1.8, z + dz, 0, 0, s * 0.25);
+      for (const dz of [-0.32, 0.32]) {
+        p.ycyl(0.07, 1.0, 8, CHROME, s * 1.42, 1.5, z + dz, 0, 0, s * 0.22);
+        p.ycyl(0.16, 0.6, 12, A, s * 1.36, 1.85, z + dz, 0, 0, s * 0.22);
+        p.ycyl(0.09, 0.4, 8, CHROME, s * 1.18, 1.95, z + dz, 0, 0, s * 0.22);
       }
     }
   }
@@ -158,30 +178,44 @@ function chassisGeometry(A) {
 
 function wheelGeometry(A) {
   const p = new Parts();
-  p.xcyl(WHEEL_R, 1.0, 20, TIRE, 0, 0, 0);
-  // Chunky staggered tread lugs.
-  const LUGS = 18;
+  // Tire carcass: rounded sidewalls (a lathe turned on its side).
+  const R = WHEEL_R - 0.08;
+  const prof = [[0.66, -0.52], [0.9, -0.54], [1.02, -0.5], [R, -0.38], [R + 0.02, 0], [R, 0.38], [1.02, 0.5], [0.9, 0.54], [0.66, 0.52]]
+    .map(([r, y]) => new THREE.Vector2(r, y));
+  p.add(new THREE.LatheGeometry(prof, 28).rotateZ(Math.PI / 2), TIRE);
+  // Deep chevron paddle tread: two staggered rows of angled lugs.
+  const LUGS = 20;
   for (let i = 0; i < LUGS; i++) {
     const a = (i / LUGS) * TURN;
-    const r = WHEEL_R + 0.06;
-    p.box(0.46, 0.2, 0.36, TIRE, i % 2 ? -0.26 : 0.26, Math.cos(a) * r, Math.sin(a) * r, a);
+    for (const side of [-1, 1]) {
+      const aa = a + (side > 0 ? TURN / LUGS / 2 : 0);
+      const r = R + 0.07;
+      p.box(0.44, 0.18, 0.2, TIRE, side * 0.24, Math.cos(aa) * r, Math.sin(aa) * r, aa, side * 0.5, 0);
+    }
   }
-  // Rim, lug nuts and a colored center cap (on both faces).
-  p.xcyl(0.62, 1.04, 14, CHROME, 0, 0, 0);
-  p.xcyl(0.5, 1.06, 14, 0x9aa3ad, 0, 0, 0);
-  for (let i = 0; i < 5; i++) {
-    const a = (i / 5) * TURN;
-    p.xcyl(0.07, 1.1, 6, DARK, 0, Math.cos(a) * 0.35, Math.sin(a) * 0.35);
+  // Beadlock rim: dish, bolt ring and a colored center cap (both faces).
+  for (const s of [-1, 1]) {
+    p.xcyl(0.66, 0.06, 20, RIM, s * 0.5, 0, 0);
+    p.xcyl(0.6, 0.04, 20, CHROME, s * 0.53, 0, 0);
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * TURN;
+      p.xcyl(0.035, 0.08, 6, DARK, s * 0.55, Math.cos(a) * 0.58, Math.sin(a) * 0.58);
+    }
+    p.xcyl(0.36, 0.06, 16, DARK, s * 0.55, 0, 0);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * TURN;
+      p.xcyl(0.05, 0.1, 6, CHROME, s * 0.57, Math.cos(a) * 0.24, Math.sin(a) * 0.24);
+    }
+    p.xcyl(0.15, 0.12, 12, A, s * 0.58, 0, 0);
   }
-  p.xcyl(0.18, 1.12, 10, A, 0, 0, 0);
   return p.build();
 }
 
 function buildMesh() {
   const root = new THREE.Group();
   const mats = {
-    paint: new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 90 }),
-    flames: new THREE.MeshBasicMaterial({ map: flameTexture(), transparent: true, alphaTest: 0.05 }),
+    paint: makeMaterial({ clearcoat: true }),
+    flames: new THREE.MeshStandardMaterial({ map: flameTexture(), transparent: true, alphaTest: 0.05, roughness: 0.3, metalness: 0.1 }),
     white: new THREE.MeshBasicMaterial({ color: 0xffffff }),
     black: new THREE.MeshBasicMaterial({ color: 0x111111 }),
   };
@@ -191,8 +225,10 @@ function buildMesh() {
   body.position.y = WHEEL_R;
   root.add(body);
   const bodyMesh = new THREE.Mesh(new THREE.BufferGeometry(), mats.paint);
+  bodyMesh.castShadow = true;
   body.add(bodyMesh);
   const chassisMesh = new THREE.Mesh(new THREE.BufferGeometry(), mats.paint);
+  chassisMesh.castShadow = true;
   root.add(chassisMesh);
 
   // Flame decals down both sides, licking backwards from the front.
@@ -204,27 +240,28 @@ function buildMesh() {
       for (let i = 0; i < uv.count; i++) uv.setX(i, 1 - uv.getX(i));
     }
     const f = new THREE.Mesh(g, mats.flames);
-    f.position.set(s * 1.515, 2.45 + Y, 0.1);
+    f.position.set(s * 1.525, 2.42 + Y, 0.1);
     f.rotation.y = s * Math.PI / 2;
     body.add(f);
   }
 
   // Big cartoon eyes and eyebrows on the windshield.
-  const eyeGeo = new THREE.CircleGeometry(0.34, 20);
-  const pupilGeo = new THREE.CircleGeometry(0.17, 16);
+  const eyeGeo = new THREE.CircleGeometry(0.3, 24);
+  const pupilGeo = new THREE.CircleGeometry(0.15, 20);
   const browGeo = new THREE.BoxGeometry(0.55, 0.1, 0.05);
   const pupils = [];
   const brows = [];
   for (const sx of [-0.55, 0.55]) {
     const eye = new THREE.Mesh(eyeGeo, mats.white);
-    eye.position.set(sx, 3.36 + Y, -0.77);
-    eye.rotation.y = Math.PI;
+    // Stuck on the windshield, which leans back a little.
+    eye.position.set(sx, 3.36 + Y, -0.88);
+    eye.rotation.set(0.11, Math.PI, 0);
     const pupil = new THREE.Mesh(pupilGeo, mats.black);
-    pupil.position.set(sx, 3.34 + Y, -0.79);
-    pupil.rotation.y = Math.PI;
+    pupil.position.set(sx, 3.34 + Y, -0.9);
+    pupil.rotation.set(0.11, Math.PI, 0);
     pupil.userData.baseX = sx;
     const brow = new THREE.Mesh(browGeo, mats.black);
-    brow.position.set(sx, 3.76 + Y, -0.8);
+    brow.position.set(sx, 3.72 + Y, -0.86);
     brow.userData.side = Math.sign(sx);
     body.add(eye, pupil, brow);
     pupils.push(pupil);
@@ -234,6 +271,7 @@ function buildMesh() {
   const wheels = [];
   for (const [x, z] of [[-WHEEL_X, -1.9], [WHEEL_X, -1.9], [-WHEEL_X, 1.9], [WHEEL_X, 1.9]]) {
     const w = new THREE.Mesh(new THREE.BufferGeometry(), mats.paint);
+    w.castShadow = true;
     w.position.set(x, WHEEL_R, z);
     w.rotation.order = 'YXZ';
     root.add(w);
@@ -257,7 +295,10 @@ export class Truck {
     this.pos = new THREE.Vector3();
     this.stuntQ = new THREE.Quaternion();
     this.angVel = new THREE.Vector3();
-    this.trick = new THREE.Vector3(); // rotation done on each axis this jump
+    // Rotation done this jump on each axis, split by direction so a backflip
+    // followed by a front flip counts as both instead of cancelling out.
+    this.trickPos = new THREE.Vector3();
+    this.trickNeg = new THREE.Vector3();
     this._q = new THREE.Quaternion();
     this._q2 = new THREE.Quaternion();
     this._v = new THREE.Vector3();
@@ -281,17 +322,29 @@ export class Truck {
     this.vy = 0;
     this.airborne = false;
     this.airTime = 0;
+    this.jumpMega = false;
     this.righting = false;
     this.pitch = 0;
     this.stuntQ.identity();
     this.angVel.set(0, 0, 0);
-    this.trick.set(0, 0, 0);
+    this.trickPos.set(0, 0, 0);
+    this.trickNeg.set(0, 0, 0);
     this.squash = 0;
     this.squashVel = 0;
     this.wheelSpin = 0;
     this.steerLook = 0;
     this.excited = 0;
+    this.droop = 0;
+    this.powers = { nitro: 0, moon: 0, giant: 0, magnet: 0 };
+    this.scale = 1;
   }
+
+  addPower(kind, seconds) {
+    this.powers[kind] = Math.max(this.powers[kind], seconds);
+  }
+
+  get gravity() { return GRAVITY * (this.powers.moon > 0 ? MOON_GRAVITY : 1); }
+  get halfWidth() { return HALF_WIDTH * this.scale; }
 
   get distance() { return -this.pos.z; }
   get forwardX() { return -Math.sin(this.heading); }
@@ -305,11 +358,15 @@ export class Truck {
       this.airborne = true;
       this.vy = vy;
       this.airTime = 0;
+      this.jumpMega = false;
     }
   }
 
   update(dt, input, world) {
     const events = [];
+    for (const k in this.powers) this.powers[k] = Math.max(0, this.powers[k] - dt);
+    this.scale += ((this.powers.giant > 0 ? GIANT_SCALE : 1) - this.scale) * Math.min(1, dt * 4);
+    const g = this.gravity;
     let steer = 0;
     if (input.left && !input.right) steer = 1;
     else if (input.right && !input.left) steer = -1;
@@ -318,7 +375,8 @@ export class Truck {
     if (!this.airborne) {
       if (steer) this.heading += steer * STEER_RATE * dt;
       else this.heading *= Math.exp(-1.5 * dt); // drift back to straight
-      this.speed += (CRUISE_SPEED - this.speed) * (1 - Math.exp(-1.0 * dt));
+      const cruise = CRUISE_SPEED * (this.powers.nitro > 0 ? NITRO_SPEED : 1);
+      this.speed += (cruise - this.speed) * (1 - Math.exp(-1.0 * dt));
       if (input.swipes.includes('up')) {
         this.bump(HOP_SPEED);
         events.push({ type: 'hop' });
@@ -335,7 +393,7 @@ export class Truck {
     this.pos.z += this.forwardZ * this.speed * dt;
 
     // Bouncy walls.
-    const lim = WALL_X - HALF_WIDTH;
+    const lim = WALL_X - this.halfWidth;
     if (Math.abs(this.pos.x) > lim) {
       const side = Math.sign(this.pos.x);
       this.pos.x = side * lim;
@@ -346,23 +404,31 @@ export class Truck {
     }
 
     const d = this.distance;
-    const ground = world.heightAt(d);
+    const x = this.pos.x;
+    const ground = world.heightAt(d, x);
 
     if (!this.airborne) {
-      const ramp = world.lipCrossed(prevD, d);
+      const ramp = world.lipCrossed(prevD, d, x);
       if (ramp) {
         this.airborne = true;
-        this.vy = ramp.launch;
+        this.vy = ramp.launch * (this.powers.nitro > 0 ? NITRO_LAUNCH : 1);
         this.pos.y = ramp.height;
         this.airTime = 0;
-        events.push({ type: 'launch', mega: ramp.mega });
+        this.jumpMega = !!ramp.mega;
+        events.push({ type: 'launch', mega: ramp.mega, label: ramp.label });
       } else {
         // Follow the ground, but take off over crests too fast to stick to.
-        const ballistic = this.pos.y + this.vy * dt - 0.5 * GRAVITY * dt * dt;
-        if (ballistic > ground + 0.02) {
+        const ballistic = this.pos.y + this.vy * dt - 0.5 * g * dt * dt;
+        if (ground - this.pos.y > Math.max(0.6, this.speed * dt * 1.6)) {
+          // Drove onto the side of something taller: just pop up onto it
+          // (following the ground here would fling the truck into the sky).
+          this.pos.y = ground;
+          this.vy = 0;
+        } else if (ballistic > ground + 0.02) {
           this.airborne = true;
           this.airTime = 0;
-          this.vy -= GRAVITY * dt;
+          this.jumpMega = false;
+          this.vy -= g * dt;
           this.pos.y = ballistic;
         } else {
           this.vy = (ground - this.pos.y) / dt;
@@ -375,8 +441,8 @@ export class Truck {
       this.updateAir(dt, input, world, events);
     } else {
       // Tilt the truck to match the ground slope.
-      const ahead = world.heightAt(d + 1.5);
-      const behind = world.heightAt(d - 1.5);
+      const ahead = world.heightAt(d + 1.5, x);
+      const behind = world.heightAt(d - 1.5, x);
       const target = Math.atan2(ahead - behind, 3);
       this.pitch += (target - this.pitch) * Math.min(1, dt * 15);
     }
@@ -387,13 +453,14 @@ export class Truck {
 
   updateAir(dt, input, world, events) {
     this.airTime += dt;
-    this.vy -= GRAVITY * dt;
+    const g = this.gravity;
+    this.vy -= g * dt;
     this.pos.y += this.vy * dt;
     this.pitch *= Math.exp(-1.5 * dt);
 
-    const ground = world.heightAt(this.distance);
+    const ground = world.heightAt(this.distance, this.pos.x);
     const h = this.pos.y - ground;
-    const timeToLand = this.vy < 0 ? (this.vy + Math.sqrt(this.vy * this.vy + 2 * GRAVITY * Math.max(h, 0))) / GRAVITY : Infinity;
+    const timeToLand = this.vy < 0 ? (this.vy + Math.sqrt(this.vy * this.vy + 2 * g * Math.max(h, 0))) / g : Infinity;
     // Magic auto-landing: just before touchdown, smoothly turn upright.
     this.righting = this.vy < 0 && timeToLand < 0.45;
 
@@ -429,21 +496,30 @@ export class Truck {
         this._v.copy(av).normalize();
         this._q.setFromAxisAngle(this._v, angle);
         this.stuntQ.multiply(this._q);
-        this.trick.addScaledVector(av, dt);
+        for (const k of ['x', 'y', 'z']) {
+          if (av[k] > 0) this.trickPos[k] += av[k] * dt;
+          else this.trickNeg[k] -= av[k] * dt;
+        }
       }
     }
 
     if (this.pos.y <= ground) {
       const impact = -this.vy;
       // A trick counts once it's at least 3/4 of the way round.
-      const count = (a) => Math.sign(a) * Math.floor(Math.abs(a) / TURN + 0.25);
+      const count = (a) => Math.floor(a / TURN + 0.25);
+      const tp = this.trickPos;
+      const tn = this.trickNeg;
       events.push({
         type: 'land',
         airTime: this.airTime,
+        mega: this.jumpMega,
         impact,
-        flips: count(this.trick.x),
-        spins: count(this.trick.y),
-        rolls: count(this.trick.z),
+        backflips: count(tp.x),
+        frontflips: count(tn.x),
+        spinsL: count(tp.y),
+        spinsR: count(tn.y),
+        rollsL: count(tp.z),
+        rollsR: count(tn.z),
       });
       this.pos.y = ground;
       this.vy = 0;
@@ -451,7 +527,8 @@ export class Truck {
       this.righting = false;
       this.stuntQ.identity();
       av.set(0, 0, 0);
-      this.trick.set(0, 0, 0);
+      this.trickPos.set(0, 0, 0);
+      this.trickNeg.set(0, 0, 0);
       this.squashVel -= Math.min(impact * 0.07, 1.4);
     }
   }
@@ -464,9 +541,18 @@ export class Truck {
     const s = THREE.MathUtils.clamp(this.squash, -0.45, 0.35);
     this.body.scale.set(1 - s * 0.5, 1 + s, 1 - s * 0.3);
     if (!this.airborne) this.body.position.y = WHEEL_R + Math.sin(performance.now() * 0.025) * 0.04;
+    // Body leans into turns on the ground.
+    this.body.rotation.z += ((this.airborne ? 0 : -this.steerLook * 0.06) - this.body.rotation.z) * Math.min(1, dt * 6);
 
+    // In the air the suspension stretches out and the wheels hang down.
+    this.droop += ((this.airborne ? 1 : 0) - this.droop) * Math.min(1, dt * (this.airborne ? 4 : 20));
+    const hang = -this.droop * 0.3;
+    this.chassisMesh.position.y = hang;
     this.wheelSpin -= (this.airborne ? 1.6 : 1) * this.speed / WHEEL_R * dt;
-    for (const w of this.wheels) w.rotation.x = this.wheelSpin;
+    for (const w of this.wheels) {
+      w.rotation.x = this.wheelSpin;
+      w.position.y = WHEEL_R + hang;
+    }
     // Front wheels turn with steering.
     this.wheels[0].rotation.y = this.wheels[1].rotation.y = this.steerLook * 0.4;
 
@@ -474,18 +560,20 @@ export class Truck {
     for (const p of this.pupils) p.position.x = p.userData.baseX - this.steerLook * 0.1;
     this.excited += ((this.airborne ? 1 : 0) - this.excited) * Math.min(1, dt * 10);
     for (const b of this.brows) {
-      b.position.y = 3.76 - WHEEL_R + this.excited * 0.12;
+      b.position.y = 3.72 - WHEEL_R + this.excited * 0.1;
       b.rotation.z = -b.userData.side * (0.12 + this.excited * 0.25); // happy, then surprised
     }
 
     this.mesh.position.copy(this.pos);
+    this.mesh.scale.setScalar(this.scale);
     this._q.setFromAxisAngle(UP, this.heading);
     this._q2.setFromAxisAngle(X_AXIS, this.pitch);
     this.mesh.quaternion.copy(this._q).multiply(this._q2).multiply(this.stuntQ);
     // Spin around the middle of the truck rather than its wheels.
     if (this.airborne) {
-      this._v.set(0, 2, 0).applyQuaternion(this.mesh.quaternion);
-      this.mesh.position.set(this.pos.x - this._v.x, this.pos.y + 2 - this._v.y, this.pos.z - this._v.z);
+      const pivot = 2 * this.scale;
+      this._v.set(0, pivot, 0).applyQuaternion(this.mesh.quaternion);
+      this.mesh.position.set(this.pos.x - this._v.x, this.pos.y + pivot - this._v.y, this.pos.z - this._v.z);
     }
   }
 }

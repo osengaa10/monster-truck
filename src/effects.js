@@ -1,22 +1,31 @@
 import * as THREE from '../vendor/three.module.min.js';
+import { softDot } from './textures.js';
 
 const CONFETTI_COLORS = [0xff3d7f, 0xffdd00, 0x00e5ff, 0x76ff03, 0xff9100, 0xd500f9, 0xffffff];
-const DUST_COLORS = [0xe3c9a0, 0xd4b080, 0xf2e2c6];
+const DUST_COLORS = [0xc9a77c, 0xb8946a, 0xd9c09a];
+const MUD_COLORS = [0x5a3a1e, 0x6b4526, 0x4a2f18];
+const FLAME_COLORS = [0xffe082, 0xffb300, 0xff6d00, 0xff3d00];
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
+const _q2 = new THREE.Quaternion();
 const _e = new THREE.Euler();
 const _p = new THREE.Vector3();
 const _s = new THREE.Vector3();
 const _c = new THREE.Color();
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
 
 // A fixed-size pool of instanced particles.
+// - billboard: always faces the camera (soft dust, smoke, flames)
+// - floor: bounces off the ground (debris chunks)
 class Pool {
-  constructor(scene, geometry, material, max, { gravity, drag, grow }) {
+  constructor(scene, geometry, material, max, { gravity, drag, grow, billboard = false, floor = false }) {
     this.max = max;
     this.gravity = gravity;
     this.drag = drag;
     this.grow = grow;
+    this.billboard = billboard;
+    this.floor = floor;
     this.mesh = new THREE.InstancedMesh(geometry, material, max);
     this.mesh.frustumCulled = false;
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -42,7 +51,8 @@ class Pool {
     this.pos.set([x, y, z], i * 3);
     this.vel.set([vx, vy, vz], i * 3);
     this.rot.set([Math.random() * 6, Math.random() * 6, Math.random() * 6], i * 3);
-    this.spin.set([(Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16], i * 3);
+    const spin = this.billboard ? 2 : 16;
+    this.spin.set([(Math.random() - 0.5) * spin, (Math.random() - 0.5) * spin, (Math.random() - 0.5) * spin], i * 3);
     this.life[i] = this.maxLife[i] = life;
     this.size[i] = size;
     this.mesh.setColorAt(i, _c.set(color));
@@ -51,8 +61,9 @@ class Pool {
 
   // Particles shrink away as they get near the camera, so the camera
   // never flies through a giant blob of dust or smoke.
-  update(dt, camPos) {
+  update(dt, camera) {
     const drag = Math.exp(-this.drag * dt);
+    const camPos = camera.position;
     let dirty = false;
     for (let i = 0; i < this.max; i++) {
       if (this.life[i] <= 0) continue;
@@ -70,11 +81,20 @@ class Pool {
         this.pos[k + j] += this.vel[k + j] * dt;
         this.rot[k + j] += this.spin[k + j] * dt;
       }
+      if (this.floor && this.pos[k + 1] < 0.1) {
+        this.pos[k + 1] = 0.1;
+        this.vel[k + 1] *= -0.35;
+        this.vel[k] *= 0.6;
+        this.vel[k + 2] *= 0.6;
+        this.spin[k] *= 0.5;
+        this.spin[k + 2] *= 0.5;
+      }
       const t = this.life[i] / this.maxLife[i];
       _p.set(this.pos[k], this.pos[k + 1], this.pos[k + 2]);
       const near = THREE.MathUtils.clamp((_p.distanceTo(camPos) - 5) / 7, 0, 1);
-      const sc = near * this.size[i] * (this.grow ? (1 + (1 - t) * 1.2) * Math.min(1, t * 3) : Math.min(1, t * 4));
-      _q.setFromEuler(_e.set(this.rot[k], this.rot[k + 1], this.rot[k + 2]));
+      const sc = near * this.size[i] * (this.grow ? (1 + (1 - t) * 1.5) * Math.min(1, t * 3) : Math.min(1, t * 4));
+      if (this.billboard) _q.copy(camera.quaternion).multiply(_q2.setFromAxisAngle(Z_AXIS, this.rot[k]));
+      else _q.setFromEuler(_e.set(this.rot[k], this.rot[k + 1], this.rot[k + 2]));
       _s.set(sc, sc, sc);
       this.mesh.setMatrixAt(i, _m.compose(_p, _q, _s));
     }
@@ -84,6 +104,7 @@ class Pool {
 
 export class Effects {
   constructor(scene) {
+    const dot = softDot(64);
     this.confetti = new Pool(
       scene,
       new THREE.PlaneGeometry(0.3, 0.45),
@@ -93,10 +114,24 @@ export class Effects {
     );
     this.dust = new Pool(
       scene,
-      new THREE.IcosahedronGeometry(0.55, 0),
-      new THREE.MeshLambertMaterial({ flatShading: true, transparent: true, opacity: 0.75, depthWrite: false }),
-      220,
-      { gravity: -1.5, drag: 2.5, grow: true },
+      new THREE.PlaneGeometry(1.6, 1.6),
+      new THREE.MeshLambertMaterial({ map: dot, transparent: true, opacity: 0.55, depthWrite: false }),
+      260,
+      { gravity: -1.2, drag: 2.2, grow: true, billboard: true },
+    );
+    this.glow = new Pool(
+      scene,
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({ map: dot, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }),
+      200,
+      { gravity: -2, drag: 3, grow: false, billboard: true },
+    );
+    this.chunks = new Pool(
+      scene,
+      new THREE.BoxGeometry(0.4, 0.22, 0.55),
+      new THREE.MeshStandardMaterial({ roughness: 0.6, metalness: 0.3 }),
+      160,
+      { gravity: 22, drag: 0.4, grow: false, floor: true },
     );
     this.wowEl = document.getElementById('wow');
     this.popupLayer = document.getElementById('popups');
@@ -124,11 +159,42 @@ export class Effects {
     }
   }
 
+  // Bits flying off whatever got crushed (hubcaps, panels, splinters, straw).
+  debris(pos, colors = [0x777777]) {
+    for (let i = 0; i < 14; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = 4 + Math.random() * 7;
+      const color = i % 4 === 0 ? 0x1a1a1a : colors[(Math.random() * colors.length) | 0];
+      this.chunks.spawn(pos.x, pos.y + 1.2, pos.z, Math.cos(a) * r, 6 + Math.random() * 8, Math.sin(a) * r,
+        color, 0.6 + Math.random() * 0.8, 1.6 + Math.random() * 0.8);
+    }
+  }
+
   // A grey puff from an exhaust stack.
   smoke(pos, big = false) {
-    const shade = 0x8a + ((Math.random() * 0x38) | 0);
+    const shade = 0x6a + ((Math.random() * 0x30) | 0);
     this.dust.spawn(pos.x, pos.y, pos.z, (Math.random() - 0.5) * 1.5, 3 + Math.random() * 2, 1,
-      (shade << 16) | (shade << 8) | shade, big ? 0.6 : 0.32, big ? 0.8 : 0.45);
+      (shade << 16) | (shade << 8) | shade, big ? 0.7 : 0.4, big ? 0.9 : 0.55);
+  }
+
+  // Nitro: flames shooting out of the exhaust stacks.
+  flame(pos) {
+    for (let i = 0; i < 3; i++) {
+      this.glow.spawn(pos.x + (Math.random() - 0.5) * 0.2, pos.y + 0.2, pos.z + 0.1,
+        (Math.random() - 0.5) * 1.5, 5 + Math.random() * 4, 2 + Math.random() * 2,
+        FLAME_COLORS[(Math.random() * FLAME_COLORS.length) | 0], 0.9 + Math.random() * 0.6, 0.25 + Math.random() * 0.15);
+    }
+  }
+
+  // Sparks when landing on a steel ramp.
+  sparks(pos) {
+    for (let i = 0; i < 40; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = 6 + Math.random() * 10;
+      this.glow.spawn(pos.x + (Math.random() - 0.5) * 3, pos.y + 0.3, pos.z + (Math.random() - 0.5) * 4,
+        Math.cos(a) * r, 2 + Math.random() * 6, Math.sin(a) * r,
+        Math.random() < 0.5 ? 0xfff3b0 : 0xffb300, 0.25 + Math.random() * 0.25, 0.3 + Math.random() * 0.3);
+    }
   }
 
   sparkle(pos) {
@@ -139,23 +205,34 @@ export class Effects {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       this.dust.spawn(
-        pos.x + Math.cos(a) * 1.5, 0.5 + Math.random(), pos.z + Math.sin(a) * 1.5,
+        pos.x + Math.cos(a) * 1.5, pos.y + 0.5 + Math.random(), pos.z + Math.sin(a) * 1.5,
         Math.cos(a) * spread * Math.random(), 1 + Math.random() * 3, Math.sin(a) * spread * Math.random(),
-        DUST_COLORS[(Math.random() * DUST_COLORS.length) | 0], 0.4 + Math.random() * 0.4, 0.6 + Math.random() * 0.4,
+        DUST_COLORS[(Math.random() * DUST_COLORS.length) | 0], 0.9 + Math.random() * 0.8, 0.8 + Math.random() * 0.6,
       );
     }
   }
 
-  // Kick up dust behind the wheels while driving.
+  // Kick up dust and mud clods behind the wheels while driving.
   trail(truck, dt) {
-    if (truck.airborne || Math.random() > dt * 15) return;
-    const side = Math.random() < 0.5 ? -1.7 : 1.7;
+    if (truck.airborne) return;
+    const s = truck.scale;
     const cos = Math.cos(truck.heading);
     const sin = Math.sin(truck.heading);
-    const x = truck.pos.x + side * cos + 2.4 * sin;
-    const z = truck.pos.z - side * sin + 2.4 * cos;
-    this.dust.spawn(x, truck.pos.y + 0.3, z, (Math.random() - 0.5) * 2, 0.5 + Math.random() * 1.5, 0,
-      DUST_COLORS[(Math.random() * DUST_COLORS.length) | 0], 0.2 + Math.random() * 0.2, 0.5);
+    if (Math.random() < dt * 18) {
+      const side = (Math.random() < 0.5 ? -1.9 : 1.9) * s;
+      const x = truck.pos.x + side * cos + 2.4 * s * sin;
+      const z = truck.pos.z - side * sin + 2.4 * s * cos;
+      this.dust.spawn(x, truck.pos.y + 0.4, z, (Math.random() - 0.5) * 2, 0.5 + Math.random() * 1.5, 1,
+        DUST_COLORS[(Math.random() * DUST_COLORS.length) | 0], (0.5 + Math.random() * 0.4) * s, 0.7);
+    }
+    if (Math.random() < dt * 6) {
+      // Roost: clods flung up and back off the rear tires.
+      const side = (Math.random() < 0.5 ? -1.9 : 1.9) * s;
+      const x = truck.pos.x + side * cos + 2.2 * s * sin;
+      const z = truck.pos.z - side * sin + 2.2 * s * cos;
+      this.chunks.spawn(x, truck.pos.y + 0.8 * s, z, (Math.random() - 0.5) * 3, 5 + Math.random() * 4, 6 + Math.random() * 5,
+        MUD_COLORS[(Math.random() * MUD_COLORS.length) | 0], 0.25 + Math.random() * 0.3, 0.9);
+    }
   }
 
   fireworks(center) {
@@ -189,16 +266,19 @@ export class Effects {
 
   showWow(text, trick = '', sub = '') {
     const el = this.wowEl;
-    el.innerHTML = text
-      + (trick ? `<span class="trick">${trick}</span>` : '')
-      + (sub ? `<span class="sub">${sub}</span>` : '');
+    const size = (s, long, xlong) => (s.length > xlong ? ' xlong' : s.length > long ? ' long' : '');
+    el.innerHTML = `<span class="word${size(text, 14, 99)}">${text}</span>`
+      + (trick ? `<span class="trick${size(trick, 26, 48)}">${trick}</span>` : '')
+      + (sub ? `<span class="sub${size(sub, 18, 99)}">${sub}</span>` : '');
     el.classList.remove('show');
     void el.offsetWidth; // restart the CSS animation
     el.classList.add('show');
   }
 
-  update(dt, camPos) {
-    this.confetti.update(dt, camPos);
-    this.dust.update(dt, camPos);
+  update(dt, camera) {
+    this.confetti.update(dt, camera);
+    this.dust.update(dt, camera);
+    this.glow.update(dt, camera);
+    this.chunks.update(dt, camera);
   }
 }

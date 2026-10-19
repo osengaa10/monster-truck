@@ -1,6 +1,6 @@
 // Offline support: serve from cache, refresh the cache in the background.
 // A new version of the game shows up on the next launch after an update.
-const CACHE = 'monster-truck-v3';
+const CACHE = 'monster-truck-v4';
 const FILES = [
   './',
   'index.html',
@@ -15,6 +15,14 @@ const FILES = [
   'src/parts.js',
   'src/cars.js',
   'src/truck-art.js',
+  'src/tricks.js',
+  'src/consts.js',
+  'src/track.js',
+  'src/crushables.js',
+  'src/powerups.js',
+  'src/scenery.js',
+  'src/sky.js',
+  'src/textures.js',
   'vendor/three.module.min.js',
   'vendor/BufferGeometryUtils.js',
   'icons/icon-180.png',

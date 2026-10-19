@@ -5,6 +5,7 @@
   "description": "A monster truck game for little kids, made for iPad/iPhone home screens.",
   "type": "module",
   "scripts": {
-    "start": "node scripts/serve.js"
+    "start": "node scripts/serve.js",
+    "test": "node --test scripts/test-tricks.js"
   }
 }

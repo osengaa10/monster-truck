@@ -218,4 +218,37 @@ export class Sfx {
     n.start(t, Math.random());
     n.stop(t + 2.3);
   }
+
+  // Rising sparkly arpeggio for picking up a power-up.
+  powerup() {
+    if (!this.ctx) return;
+    const t = this.t;
+    [392, 523, 659, 784, 1047, 1319].forEach((f, i) => {
+      const g = this.gain();
+      const start = t + i * 0.055;
+      this.env(g, start, 0.14, 0.01, 0.25);
+      const o = this.osc('triangle', f, g);
+      o.frequency.exponentialRampToValueAtTime(f * 1.5, start + 0.25);
+      o.start(start);
+      o.stop(start + 0.3);
+    });
+  }
+
+  // A deep roar with a rushing blast of air, for nitro.
+  nitro() {
+    if (!this.ctx) return;
+    const t = this.t;
+    const g = this.gain();
+    this.env(g, t, 0.4, 0.05, 1.2);
+    const lp = this.filter('lowpass', 900, g);
+    const o = this.osc('sawtooth', 60, lp);
+    o.frequency.exponentialRampToValueAtTime(140, t + 0.8);
+    o.start(t);
+    o.stop(t + 1.3);
+    const g2 = this.gain();
+    this.env(g2, t, 0.3, 0.05, 1.0);
+    const n = this.noiseSrc(this.filter('bandpass', 700, g2, 0.8));
+    n.start(t, Math.random());
+    n.stop(t + 1.1);
+  }
 }

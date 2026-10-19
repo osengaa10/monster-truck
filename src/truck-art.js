@@ -3,25 +3,36 @@
 
 const hex = (n) => '#' + n.toString(16).padStart(6, '0');
 
+// Monster tire with deep chevron paddles and a beadlock rim.
 function wheel(cx, cy, accent) {
   const lugs = [];
-  for (let i = 0; i < 16; i++) {
-    lugs.push(`<rect x="${cx - 5}" y="${cy - 34}" width="10" height="8" rx="2" transform="rotate(${i * 22.5} ${cx} ${cy})"/>`);
+  for (let i = 0; i < 20; i++) {
+    const deep = i % 2 === 0;
+    // A slanted paddle, drawn pointing up and then turned into place.
+    const [w, top] = deep ? [6, 35] : [4.5, 33];
+    lugs.push(`<polygon points="${-w},${-top} ${w},${-top} ${w + 3},-26 ${-w + 3},-26" transform="translate(${cx} ${cy}) rotate(${i * 18})"/>`);
+  }
+  const bolts = [];
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    bolts.push(`<circle cx="${(cx + Math.cos(a) * 13.2).toFixed(1)}" cy="${(cy + Math.sin(a) * 13.2).toFixed(1)}" r="1.1"/>`);
   }
   const nuts = [];
-  for (let i = 0; i < 5; i++) {
-    const a = (i / 5) * Math.PI * 2;
-    nuts.push(`<circle cx="${(cx + Math.cos(a) * 7.5).toFixed(1)}" cy="${(cy + Math.sin(a) * 7.5).toFixed(1)}" r="1.6"/>`);
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    nuts.push(`<circle cx="${(cx + Math.cos(a) * 6.5).toFixed(1)}" cy="${(cy + Math.sin(a) * 6.5).toFixed(1)}" r="1.4"/>`);
   }
   return `
     <g fill="#1d1d1d">${lugs.join('')}</g>
     <circle cx="${cx}" cy="${cy}" r="29" fill="#1d1d1d"/>
-    <circle cx="${cx}" cy="${cy}" r="22" fill="none" stroke="#333" stroke-width="2"/>
-    <circle cx="${cx}" cy="${cy}" r="15" fill="#d8dde3"/>
-    <circle cx="${cx}" cy="${cy}" r="11.5" fill="#9aa3ad"/>
-    <g fill="#2a2a2a">${nuts.join('')}</g>
-    <circle cx="${cx}" cy="${cy}" r="4.5" fill="${accent}"/>
-    <path d="M${cx - 11} ${cy - 6} A12 12 0 0 1 ${cx - 2} ${cy - 12}" stroke="#fff" stroke-width="2" fill="none" opacity="0.7"/>`;
+    <circle cx="${cx}" cy="${cy}" r="24" fill="none" stroke="#2c2c2c" stroke-width="3"/>
+    <circle cx="${cx}" cy="${cy}" r="16" fill="#c9ced4"/>
+    <circle cx="${cx}" cy="${cy}" r="15" fill="none" stroke="#eef1f4" stroke-width="1.2"/>
+    <g fill="#3a3a3a">${bolts.join('')}</g>
+    <circle cx="${cx}" cy="${cy}" r="10" fill="#2a2a2a"/>
+    <g fill="#d8dde3">${nuts.join('')}</g>
+    <circle cx="${cx}" cy="${cy}" r="4.2" fill="${accent}"/>
+    <path d="M${cx - 12} ${cy - 7} A14 14 0 0 1 ${cx - 2} ${cy - 13.5}" stroke="#fff" stroke-width="2" fill="none" opacity="0.7"/>`;
 }
 
 function flames(id) {
@@ -64,10 +75,13 @@ export function truckSvg(colors, id) {
   <rect x="58" y="18" width="2.5" height="44" fill="#fff" opacity="0.6"/>
   <rect x="57" y="16" width="9" height="5" rx="1" fill="#2a2a2a"/>
 
-  <!-- frame and shocks -->
-  <rect x="38" y="92" width="128" height="9" rx="2" fill="#2a2a2a"/>
-  <rect x="60" y="86" width="8" height="26" rx="3" fill="${accent}" stroke="#2a2a2a" stroke-width="1"/>
-  <rect x="134" y="86" width="8" height="26" rx="3" fill="${accent}" stroke="#2a2a2a" stroke-width="1"/>
+  <!-- tube frame, 4-link bars and twin shocks at each corner -->
+  <rect x="38" y="92" width="128" height="8" rx="4" fill="#2a2a2a"/>
+  <path d="M52 116 L78 99 M150 116 L124 99" stroke="#c9ced4" stroke-width="3.5" stroke-linecap="round"/>
+  <rect x="44" y="86" width="7" height="26" rx="3" fill="${accent}" stroke="#2a2a2a" stroke-width="1"/>
+  <rect x="55" y="86" width="7" height="26" rx="3" fill="${accent}" stroke="#2a2a2a" stroke-width="1"/>
+  <rect x="140" y="86" width="7" height="26" rx="3" fill="${accent}" stroke="#2a2a2a" stroke-width="1"/>
+  <rect x="151" y="86" width="7" height="26" rx="3" fill="${accent}" stroke="#2a2a2a" stroke-width="1"/>
 
   <!-- pickup bed and roll bar -->
   <path d="M34 60 L34 40 Q34 36 38 36 L66 36" stroke="#d8dde3" stroke-width="4" fill="none" stroke-linecap="round"/>
@@ -82,10 +96,16 @@ export function truckSvg(colors, id) {
   <line x1="124" y1="62" x2="124" y2="84" stroke="#000" stroke-opacity="0.35" stroke-width="1.2"/>
   <rect x="113" y="64" width="8" height="2.5" rx="1" fill="#d8dde3"/>
 
+  <!-- supercharger poking out of the hood -->
+  <rect x="140" y="52" width="20" height="9" rx="1.5" fill="#d8dde3"/>
+  <path d="M144 52 V61 M150 52 V61 M156 52 V61" stroke="#2a2a2a" stroke-width="1.5"/>
+  <path d="M139 52 L141 45 Q142 43 145 43 L158 44 L161 52Z" fill="${body}" stroke="#2a2a2a" stroke-width="0.8"/>
+
   <!-- front: headlight, grille, bumper; back: tail light, bumper -->
   <rect x="172" y="68" width="8" height="9" rx="2" fill="#fff3a0" stroke="#d8dde3" stroke-width="1.5"/>
-  <rect x="166" y="90" width="18" height="8" rx="3" fill="#d8dde3"/>
-  <rect x="24" y="90" width="14" height="8" rx="3" fill="#d8dde3"/>
+  <rect x="168" y="89" width="18" height="6" rx="3" fill="#d8dde3"/>
+  <path d="M172 95 L166 100" stroke="#d8dde3" stroke-width="3" stroke-linecap="round"/>
+  <rect x="22" y="89" width="16" height="6" rx="3" fill="#d8dde3"/>
   <rect x="26" y="66" width="5" height="8" rx="1" fill="#ff2a2a"/>
 
   <!-- cab -->

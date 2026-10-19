@@ -1,66 +1,114 @@
 import * as THREE from '../vendor/three.module.min.js';
-import { makeCar, CAR_COLORS, CAR_VARIANT_COUNT } from './cars.js';
+import { WALL_X, LANES } from './consts.js';
+import { BUILDERS, Sequencer } from './track.js';
+import { makeCrushable, startCrush, animateCrush, CAR_KINDS } from './crushables.js';
+import { makePickup, POWER_KINDS } from './powerups.js';
+import { Scenery, BIOMES, BIOME_ORDER } from './scenery.js';
+import { Parts, mat, MATERIAL } from './parts.js';
+import {
+  dirtTextures, concreteTexture, bannerTexture, fenceTexture, plankTexture, trussTexture, hazardTexture,
+} from './textures.js';
 
 // The track runs along -Z. "Distance" d = -z. Track spans x in [-WALL_X, WALL_X].
-export const WALL_X = 14;
+export { WALL_X };
 
-const GRAVITY = 14;
-const SPEED = 24;
 const AHEAD = 450;
 const BEHIND = 60;
-const SNAP = 8;
+const TILE = 16;       // the dirt texture repeats every TILE units
+const WALL_SNAP = 48;  // the banners repeat every 48 units
+const RAMP_TILE = 10;
+const BIOME_SEGMENTS = 7; // the scenery changes every this many segments
+const MAX_STARS = 256;
+const FLAG_COLORS = [0xff4d4d, 0xffd93d, 0x4dabff, 0x6bff8a, 0xff7ae0, 0xffa94d];
 
-const BALLOON_COLORS = [0xff4d4d, 0xffd93d, 0x4dabff, 0x6bff8a, 0xff7ae0, 0xffa94d];
-
+const _to = new THREE.Vector3();
+const _m = new THREE.Matrix4();
+const _q = new THREE.Quaternion();
+const _s = new THREE.Vector3();
+const UP = new THREE.Vector3(0, 1, 0);
 const rand = (a, b) => a + Math.random() * (b - a);
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
-function canvasTexture(size, draw, repeatX, repeatY) {
-  const c = document.createElement('canvas');
-  c.width = c.height = size;
-  draw(c.getContext('2d'), size);
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(repeatX, repeatY);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 4;
-  return t;
-}
+const params = new URLSearchParams(location.search);
+const FORCED_SEGMENTS = (params.get('seg') || '').split(',').filter(Boolean);
+const FORCED_POWER = POWER_KINDS.includes(params.get('power')) ? params.get('power') : null;
+const FORCED_BIOME = BIOMES[params.get('biome')] ? params.get('biome') : null;
 
-function speckle(ctx, size, base, colors, count, maxR) {
-  ctx.fillStyle = base;
-  ctx.fillRect(0, 0, size, size);
-  for (let i = 0; i < count; i++) {
-    ctx.fillStyle = pick(colors);
-    ctx.beginPath();
-    ctx.arc(Math.random() * size, Math.random() * size, Math.random() * maxR + 1, 0, Math.PI * 2);
-    ctx.fill();
-  }
-}
-
-// Build a solid that follows a height profile across the full track width.
-// samples: [{ d, y }] with increasing d. Vertex colors give stripes on top.
+// Build a solid that follows a height profile across [x0, x1].
+// samples: [{ d, y }] with increasing d. Vertex colors tint the top in bands.
+// Group 0 is the top surface, group 1 the sides and ends.
 function profileGeometry(samples, x0, x1, topColors, sideColor) {
-  const pos = [];
-  const col = [];
-  const v = (x, y, d, c) => { pos.push(x, y, -d); col.push(c.r, c.g, c.b); };
-  const quad = (a, b, c, d, color) => { v(...a, color); v(...b, color); v(...c, color); v(...a, color); v(...c, color); v(...d, color); };
+  const top = { pos: [], col: [], uv: [] };
+  const side = { pos: [], col: [], uv: [] };
+  // Corners in counter-clockwise order as seen from outside. Each is [x, y, d, u, v].
+  const quad = (buf, corners, c) => {
+    for (const k of [0, 1, 2, 0, 2, 3]) {
+      const p = corners[k];
+      buf.pos.push(p[0], p[1], -p[2]);
+      buf.col.push(c.r, c.g, c.b);
+      buf.uv.push(p[3] / RAMP_TILE, p[4] / RAMP_TILE);
+    }
+  };
+  let s = 0; // distance along the surface, so steep faces don't stretch the texture
   for (let i = 0; i < samples.length - 1; i++) {
     const a = samples[i];
     const b = samples[i + 1];
-    quad([x0, a.y, a.d], [x1, a.y, a.d], [x1, b.y, b.d], [x0, b.y, b.d], topColors[i % topColors.length]);
-    for (const x of [x0, x1]) {
-      quad([x, 0, a.d], [x, a.y, a.d], [x, b.y, b.d], [x, 0, b.d], sideColor);
-    }
+    const s1 = s + Math.hypot(b.d - a.d, b.y - a.y);
+    quad(top, [[x0, a.y, a.d, x0, s], [x1, a.y, a.d, x1, s], [x1, b.y, b.d, x1, s1], [x0, b.y, b.d, x0, s1]], topColors[i % topColors.length]);
+    quad(side, [[x0, 0, a.d, a.d, 0], [x0, a.y, a.d, a.d, a.y], [x0, b.y, b.d, b.d, b.y], [x0, 0, b.d, b.d, 0]], sideColor);
+    quad(side, [[x1, 0, a.d, a.d, 0], [x1, 0, b.d, b.d, 0], [x1, b.y, b.d, b.d, b.y], [x1, a.y, a.d, a.d, a.y]], sideColor);
+    s = s1;
   }
-  for (const s of [samples[0], samples[samples.length - 1]]) {
-    if (s.y > 0.01) quad([x0, 0, s.d], [x1, 0, s.d], [x1, s.y, s.d], [x0, s.y, s.d], sideColor);
-  }
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  if (first.y > 0.01) quad(side, [[x0, 0, first.d, x0, 0], [x1, 0, first.d, x1, 0], [x1, first.y, first.d, x1, first.y], [x0, first.y, first.d, x0, first.y]], sideColor);
+  if (last.y > 0.01) quad(side, [[x1, 0, last.d, x1, 0], [x0, 0, last.d, x0, 0], [x0, last.y, last.d, x0, last.y], [x1, last.y, last.d, x1, last.y]], sideColor);
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setAttribute('position', new THREE.Float32BufferAttribute(top.pos.concat(side.pos), 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(top.col.concat(side.col), 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(top.uv.concat(side.uv), 2));
+  g.addGroup(0, top.pos.length / 3, 0);
+  g.addGroup(top.pos.length / 3, side.pos.length / 3, 1);
   g.computeVertexNormals();
   return g;
+}
+
+// All the stars share one instanced mesh (one draw call for all of them).
+class StarField {
+  constructor(scene, geometry, material) {
+    this.mesh = new THREE.InstancedMesh(geometry, material, MAX_STARS);
+    this.mesh.frustumCulled = false;
+    this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.free = [];
+    for (let i = MAX_STARS - 1; i >= 0; i--) {
+      this.free.push(i);
+      this.hide(i);
+    }
+    scene.add(this.mesh);
+  }
+
+  alloc() {
+    return this.free.length ? this.free.pop() : -1;
+  }
+
+  release(i) {
+    if (i < 0) return;
+    this.hide(i);
+    this.free.push(i);
+  }
+
+  hide(i) {
+    this.mesh.setMatrixAt(i, _m.makeScale(0, 0, 0));
+    this.mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  place(i, pos, rotY, scale) {
+    if (i < 0) return;
+    _q.setFromAxisAngle(UP, rotY);
+    _s.setScalar(scale);
+    this.mesh.setMatrixAt(i, _m.compose(pos, _q, _s));
+    this.mesh.instanceMatrix.needsUpdate = true;
+  }
 }
 
 function starShape() {
@@ -80,32 +128,32 @@ export class World {
     this.scene = scene;
     this.segments = [];
     this.features = [];
+    this.biome = BIOME_ORDER[0];
+    this.currentBiome = null;
+    this.scenery = new Scenery(scene);
 
-    // Shared materials and geometries.
-    this.rampMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, flatShading: true });
-    this.rampColors = [new THREE.Color(0xff8a1f), new THREE.Color(0xffc93c)];
-    this.megaColors = [new THREE.Color(0xff3d7f), new THREE.Color(0xffe14d)];
-    this.rollerColors = [new THREE.Color(0xa0703f), new THREE.Color(0xb9854f)];
-    this.rampSide = new THREE.Color(0x7a4a21);
+    // Surfaces: packed dirt, or a steel mega ramp (plank deck + see-through truss sides).
+    const packed = dirtTextures({ dark: 0x6e4a2a, light: 0x9c7046, ruts: 2, pebbles: 300, smooth: 0.5, seed: 5 }, [1, 1]);
+    const dirtMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: packed.map, normalMap: packed.normalMap, roughness: 0.95 });
+    const deckMat = new THREE.MeshStandardMaterial({ vertexColors: true, map: plankTexture([1, 1]), roughness: 0.75, side: THREE.DoubleSide });
+    const trussMat = new THREE.MeshStandardMaterial({
+      vertexColors: true, map: trussTexture([1, 1]), alphaTest: 0.5, side: THREE.DoubleSide, metalness: 0.7, roughness: 0.4,
+    });
+    this.surfaceStyles = {
+      dirt: { mat: dirtMat, top: [0xffffff], side: 0xa08a78, shadow: true },
+      roller: { mat: dirtMat, top: [0xf2ebe2], side: 0xa08a78, shadow: false },
+      steel: { mat: [deckMat, trussMat], top: [0xffffff], side: 0xffffff, shadow: true },
+    };
+    for (const st of Object.values(this.surfaceStyles)) {
+      st.top = st.top.map((c) => new THREE.Color(c));
+      st.side = new THREE.Color(st.side);
+    }
+    this.hazardMat = new THREE.MeshStandardMaterial({ map: hazardTexture([1, 1]), roughness: 0.5 });
 
-    this.starGeo = new THREE.ExtrudeGeometry(starShape(), { depth: 0.4, bevelEnabled: false });
+    this.starGeo = new THREE.ExtrudeGeometry(starShape(), { depth: 0.4, bevelEnabled: true, bevelSize: 0.12, bevelThickness: 0.12, bevelSegments: 2 });
     this.starGeo.center();
-    this.starMat = new THREE.MeshPhongMaterial({ color: 0xffdd00, emissive: 0xb07a00, shininess: 100, flatShading: true });
-
-    this.trunkGeo = new THREE.CylinderGeometry(0.5, 0.7, 3, 6);
-    this.leafGeo = new THREE.ConeGeometry(3, 7, 7);
-    this.trunkMat = new THREE.MeshLambertMaterial({ color: 0x8b5a2b, flatShading: true });
-    this.leafMats = [0x2e9e48, 0x3fbf5a, 0x26874a].map((c) => new THREE.MeshLambertMaterial({ color: c, flatShading: true }));
-    this.balloonGeo = new THREE.SphereGeometry(1.4, 12, 10).scale(1, 1.2, 1);
-    this.balloonMats = BALLOON_COLORS.map((c) => new THREE.MeshPhongMaterial({ color: c, shininess: 120 }));
-    this.stringGeo = new THREE.CylinderGeometry(0.04, 0.04, 4, 3);
-    this.stringMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    this.cloudGeo = new THREE.SphereGeometry(6, 9, 7);
-    this.cloudMat = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0x9a9a9a, flatShading: true });
-    this.flagPoleGeo = new THREE.CylinderGeometry(0.1, 0.1, 4, 4);
-    this.flagGeo = new THREE.PlaneGeometry(1.8, 1.1);
-    this.flagMats = BALLOON_COLORS.map((c) => new THREE.MeshLambertMaterial({ color: c, side: THREE.DoubleSide }));
-    this.poleMat = new THREE.MeshLambertMaterial({ color: 0xeeeeee });
+    this.starMat = new THREE.MeshStandardMaterial({ color: 0xffc400, emissive: 0x6a4200, metalness: 0.85, roughness: 0.25 });
+    this.stars = new StarField(scene, this.starGeo, this.starMat);
 
     this.buildGround();
     this.reset();
@@ -113,27 +161,50 @@ export class World {
 
   buildGround() {
     const LEN = 600;
-    const dirt = canvasTexture(256, (ctx, s) => speckle(ctx, s, '#b98450', ['#a87444', '#c9955f', '#9c6a3c', '#d1a06a'], 500, 5), WALL_X * 2 / SNAP, LEN / SNAP);
-    const grass = canvasTexture(256, (ctx, s) => speckle(ctx, s, '#5cc95a', ['#4fb84e', '#6bd968', '#48a847', '#7be077'], 600, 4), 400 / 16, LEN / 16);
-    const stripes = canvasTexture(64, (ctx, s) => {
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, s, s);
-      ctx.fillStyle = '#ff3b3b';
-      ctx.fillRect(0, 0, s / 2, s);
-    }, LEN / 4, 1);
+    const dirt = dirtTextures({ dark: 0x6b4526, light: 0xa77a4c, ruts: 3, pebbles: 350, seed: 1 }, [WALL_X * 2 / TILE, LEN / TILE]);
+    this.floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(WALL_X * 2, LEN).rotateX(-Math.PI / 2),
+      new THREE.MeshStandardMaterial({ map: dirt.map, normalMap: dirt.normalMap, roughness: 1 }),
+    );
+    this.floor.receiveShadow = true;
+    this.floorTint = new THREE.Color(0xffffff);
 
-    this.floor = new THREE.Mesh(new THREE.PlaneGeometry(WALL_X * 2, LEN).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ map: dirt }));
-    this.floor.position.y = 0;
-    this.grass = new THREE.Mesh(new THREE.PlaneGeometry(400, LEN).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ map: grass }));
-    this.grass.position.y = -0.05;
-    const wallMat = new THREE.MeshLambertMaterial({ map: stripes });
+    // Arena walls: concrete, a strip of banners facing the track, and a
+    // chain-link catch fence on top.
+    this.walls = new THREE.Group();
+    const concrete = new THREE.MeshStandardMaterial({ map: concreteTexture([1, LEN / 4]), roughness: 0.9 });
     const wallGeo = new THREE.BoxGeometry(1, 1.6, LEN);
-    this.walls = [-1, 1].map((side) => {
-      const w = new THREE.Mesh(wallGeo, wallMat);
-      w.position.set(side * (WALL_X + 0.5), 0.8, 0);
-      return w;
+    const banner = new THREE.MeshStandardMaterial({ map: bannerTexture(LEN / WALL_SNAP), roughness: 0.6 });
+    const bannerGeo = new THREE.PlaneGeometry(LEN, 1.15);
+    const fenceMat = new THREE.MeshStandardMaterial({
+      map: fenceTexture([LEN / 1.5, 2.6 / 1.5]), alphaTest: 0.5, side: THREE.DoubleSide, metalness: 0.7, roughness: 0.4,
     });
-    this.scene.add(this.floor, this.grass, ...this.walls);
+    const fenceGeo = new THREE.PlaneGeometry(LEN, 2.6);
+    const railMat = new THREE.MeshStandardMaterial({ color: 0x9aa1a8, metalness: 0.8, roughness: 0.35 });
+    const railGeo = new THREE.CylinderGeometry(0.06, 0.06, LEN, 6).rotateX(Math.PI / 2);
+    const postGeo = new THREE.CylinderGeometry(0.07, 0.07, 2.8, 6);
+    const POST_GAP = 4;
+    const posts = new THREE.InstancedMesh(postGeo, railMat, (LEN / POST_GAP) * 2);
+    const m = new THREE.Matrix4();
+    let n = 0;
+    for (const side of [-1, 1]) {
+      const x = side * (WALL_X + 0.5);
+      const w = new THREE.Mesh(wallGeo, concrete);
+      w.position.set(x, 0.8, 0);
+      w.castShadow = w.receiveShadow = true;
+      const b = new THREE.Mesh(bannerGeo, banner);
+      b.position.set(side * (WALL_X - 0.01), 0.85, 0);
+      b.rotation.y = -side * Math.PI / 2;
+      const f = new THREE.Mesh(fenceGeo, fenceMat);
+      f.position.set(x, 1.6 + 1.3, 0);
+      f.rotation.y = Math.PI / 2;
+      const rail = new THREE.Mesh(railGeo, railMat);
+      rail.position.set(x, 1.6 + 2.6, 0);
+      this.walls.add(w, b, f, rail);
+      for (let z = -LEN / 2; z < LEN / 2; z += POST_GAP) posts.setMatrixAt(n++, m.makeTranslation(x, 1.6 + 1.4, z));
+    }
+    this.walls.add(posts);
+    this.scene.add(this.floor, this.walls);
   }
 
   reset() {
@@ -142,196 +213,152 @@ export class World {
     this.features = [];
     this.nextD = -BEHIND;
     this.segCount = 0;
+    this.sequencer = new Sequencer(FORCED_SEGMENTS);
   }
 
   // ---------- Physics queries ----------
 
-  heightAt(d) {
+  // Ground height at distance d and sideways position x.
+  heightAt(d, x = 0) {
     let h = 0;
     for (const f of this.features) {
-      if (d >= f.d0 && d <= f.d1) h = Math.max(h, f.heightAt(d));
+      if (d >= f.d0 && d <= f.d1 && x >= f.x0 && x <= f.x1) h = Math.max(h, f.heightAt(d));
     }
     return h;
   }
 
-  lipCrossed(prevD, d) {
+  // What the ground is made of here ('dirt', 'roller', 'steel'), or null for the floor.
+  styleAt(d, x = 0) {
+    let h = 0.05;
+    let style = null;
     for (const f of this.features) {
-      if (f.type === 'ramp' && prevD < f.d1 && d >= f.d1) return f;
+      if (d >= f.d0 && d <= f.d1 && x >= f.x0 && x <= f.x1) {
+        const fh = f.heightAt(d);
+        if (fh >= h) {
+          h = fh;
+          style = f.style;
+        }
+      }
+    }
+    return style;
+  }
+
+  lipCrossed(prevD, d, x = 0) {
+    for (const f of this.features) {
+      if (f.type === 'ramp' && prevD < f.d1 && d >= f.d1 && x >= f.x0 && x <= f.x1) return f;
     }
     return null;
+  }
+
+  // ---------- Building blocks used by track.js ----------
+
+  addFeature(f) {
+    this.features.push({ x0: -WALL_X, x1: WALL_X, ...f });
+  }
+
+  addSurface(seg, samples, { x0 = -WALL_X, x1 = WALL_X, style = 'dirt' } = {}) {
+    const st = this.surfaceStyles[style];
+    const geo = profileGeometry(samples, x0, x1, st.top, st.side);
+    const mesh = new THREE.Mesh(geo, st.mat);
+    mesh.castShadow = st.shadow;
+    mesh.receiveShadow = true;
+    this.scene.add(mesh);
+    seg.objects.push(mesh);
+    seg.geometries.push(geo);
+    return mesh;
+  }
+
+  // Yellow and black stripes along the lip of a steel ramp.
+  addLipStripe(seg, x0, x1, y, d) {
+    const geo = new THREE.BoxGeometry(x1 - x0, 0.14, 0.9);
+    const uv = geo.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setX(i, uv.getX(i) * (x1 - x0) / 1.5);
+    const m = new THREE.Mesh(geo, this.hazardMat);
+    m.position.set((x0 + x1) / 2, y + 0.02, -(d - 0.45));
+    this.scene.add(m);
+    seg.objects.push(m);
+    seg.geometries.push(geo);
+  }
+
+  // Which crushable to put down next, depending on the scenery.
+  crushKind() {
+    const extra = this.biome === 'country' ? ['hay', 'hay'] : this.biome === 'desert' ? ['junker', 'crates'] : ['potty'];
+    return pick([...CAR_KINDS, ...CAR_KINDS, 'junker', 'crates', ...extra]);
+  }
+
+  addCrushRow(seg, d, fill, kinds = null) {
+    for (const x of [-10.5, -5.2, 0, 5.2, 10.5]) {
+      if (Math.random() > fill) continue;
+      this.addCrushable(seg, kinds ? pick(kinds) : this.crushKind(), x + rand(-0.4, 0.4), d + rand(-0.6, 0.6));
+    }
+  }
+
+  addCrushable(seg, kind, x, d, opts) {
+    const c = makeCrushable(kind, x, d, opts);
+    this.scene.add(c.mesh);
+    seg.objects.push(c.mesh);
+    seg.crushables.push(c);
+    return c;
+  }
+
+  addStar(seg, x, y, d) {
+    seg.stars.push({ i: this.stars.alloc(), pos: new THREE.Vector3(x, y, -d), rot: Math.random() * Math.PI, baseY: y, taken: false, t: 0, gone: false });
+  }
+
+  addPowerUp(seg, kind, x, y, d) {
+    kind = FORCED_POWER || kind;
+    const m = makePickup(kind);
+    m.position.set(x, y, -d);
+    this.scene.add(m);
+    seg.objects.push(m);
+    seg.pickups.push({ mesh: m, kind, baseY: y, taken: false, t: 0, phase: Math.random() * 6 });
+  }
+
+  // A flag on a pole; `inward` (+1 or -1) is which way the flag points.
+  // Flags go into the segment's merged props mesh.
+  addFlag(seg, x, y, d, inward = -Math.sign(x)) {
+    seg.props.ycyl(0.08, 4, 8, mat(0xdddddd, 'chrome'), x, y + 2, -d);
+    seg.props.box(1.8, 1.1, 0.04, mat(pick(FLAG_COLORS), 'matte'), x + inward * 0.9, y + 3.4, -d, 0, 0, 0);
   }
 
   // ---------- Generation ----------
 
   addSegment() {
     const n = this.segCount++;
-    const seg = { start: this.nextD, objects: [], cars: [], stars: [], balloons: [], geometries: [] };
+    const seg = { start: this.nextD, objects: [], crushables: [], stars: [], pickups: [], balloons: [], geometries: [], props: new Parts() };
     let d = seg.start;
+    this.biome = seg.biome = FORCED_BIOME || BIOME_ORDER[Math.floor(n / BIOME_SEGMENTS) % BIOME_ORDER.length];
 
     if (n === 0) {
       d += BEHIND + 25; // flat start runway
     } else {
-      const kind = n % 6 === 0 ? 'mega' : (n % 4 === 2 ? 'rollers' : 'ramp');
+      const kind = this.sequencer.next();
       d += 12;
-      if (Math.random() < 0.55) {
-        this.addCarRow(seg, d + 6, rand(0.4, 0.8));
-        d += 24; // room to bounce off the cars before the ramp
+      // Now and then a power-up waits at the start of a section.
+      if (kind !== 'sky' && (FORCED_POWER ? n % 2 === 1 : n >= 2 && Math.random() < 0.35)) {
+        this.addPowerUp(seg, pick(POWER_KINDS), pick(LANES), 2.6, d);
+        d += 8;
       }
-      if (kind === 'rollers') {
-        d = this.addRollers(seg, d + 4);
-      } else {
-        d = this.addRamp(seg, d + 4, kind === 'mega');
-      }
+      seg.kind = kind;
+      d = BUILDERS[kind](this, seg, d + 4);
     }
 
-    this.addScenery(seg, seg.start, d);
+    this.scenery.build(seg, seg.start, d, seg.biome);
+    if (!seg.props.empty) {
+      const g = seg.props.build();
+      const m = new THREE.Mesh(g, MATERIAL);
+      m.castShadow = true;
+      this.scene.add(m);
+      seg.objects.push(m);
+      seg.geometries.push(g);
+    }
     seg.end = d;
     this.nextD = d;
     this.segments.push(seg);
   }
 
-  addRamp(seg, d0, mega) {
-    const H = mega ? 9 : rand(3.5, 6);
-    const L = mega ? 34 : H * 4.5;
-    const launch = mega ? 24 : rand(15, 19);
-    const d1 = d0 + L;
-    const samples = [];
-    const N = 14;
-    for (let i = 0; i <= N; i++) {
-      const t = i / N;
-      samples.push({ d: d0 + t * L, y: H * t * t });
-    }
-    const geo = profileGeometry(samples, -WALL_X, WALL_X, mega ? this.megaColors : this.rampColors, this.rampSide);
-    const mesh = new THREE.Mesh(geo, this.rampMat);
-    this.scene.add(mesh);
-    seg.objects.push(mesh);
-    seg.geometries.push(geo);
-
-    this.features.push({
-      type: 'ramp', d0, d1, height: H, launch, mega,
-      heightAt: (d) => { const t = (d - d0) / L; return H * t * t; },
-    });
-
-    // Flags on the lip corners.
-    for (const side of [-1, 1]) this.addFlag(seg, side * (WALL_X - 0.6), H, d1 - 0.5);
-
-    // Collectible stars along the flight arc in one lane.
-    const tFlight = (launch + Math.sqrt(launch * launch + 2 * GRAVITY * H)) / GRAVITY;
-    const lane = pick([-7, 0, 7]);
-    const count = mega ? 7 : 5;
-    for (let i = 1; i <= count; i++) {
-      const t = (i / (count + 1)) * tFlight * 0.9;
-      const y = H + launch * t - 0.5 * GRAVITY * t * t + 2;
-      this.addStar(seg, lane, y, d1 + SPEED * t);
-    }
-
-    const flight = SPEED * tFlight;
-    // Sometimes park cars right where the truck lands. CRUNCH.
-    if (Math.random() < 0.5) this.addCarRow(seg, d1 + flight * rand(0.85, 1.0), 0.8);
-    return d1 + flight + rand(20, 35);
-  }
-
-  addRollers(seg, d0) {
-    const count = 4;
-    const wave = 26;
-    const A = 1.8;
-    const len = count * wave;
-    const samples = [];
-    const N = count * 10;
-    const f = (d) => A * (1 - Math.cos(((d - d0) / wave) * Math.PI * 2)) / 2;
-    for (let i = 0; i <= N; i++) {
-      const d = d0 + (i / N) * len;
-      samples.push({ d, y: f(d) });
-    }
-    const geo = profileGeometry(samples, -WALL_X, WALL_X, this.rollerColors, this.rampSide);
-    const mesh = new THREE.Mesh(geo, this.rampMat);
-    this.scene.add(mesh);
-    seg.objects.push(mesh);
-    seg.geometries.push(geo);
-    this.features.push({ type: 'roller', d0, d1: d0 + len, heightAt: f });
-    for (let i = 0; i < count; i++) {
-      this.addStar(seg, pick([-7, 0, 7]), A + 3.5, d0 + (i + 0.5) * wave + 4);
-    }
-    return d0 + len + 20;
-  }
-
-  addCarRow(seg, d, fill) {
-    for (const x of [-10.5, -5.2, 0, 5.2, 10.5]) {
-      if (Math.random() > fill) continue;
-      const car = makeCar((Math.random() * CAR_COLORS.length) | 0, (Math.random() * CAR_VARIANT_COUNT) | 0);
-      car.position.set(x + rand(-0.5, 0.5), 0, -d);
-      car.rotation.y = (Math.random() < 0.5 ? 0 : Math.PI) + rand(-0.15, 0.15);
-      this.scene.add(car);
-      seg.objects.push(car);
-      seg.cars.push({ mesh: car, x: car.position.x, d, crushed: false, t: 0 });
-    }
-  }
-
-  addStar(seg, x, y, d) {
-    const m = new THREE.Mesh(this.starGeo, this.starMat);
-    m.position.set(x, y, -d);
-    m.rotation.y = Math.random() * Math.PI;
-    this.scene.add(m);
-    seg.objects.push(m);
-    seg.stars.push({ mesh: m, baseY: y, taken: false, t: 0 });
-  }
-
-  addFlag(seg, x, y, d) {
-    const pole = new THREE.Mesh(this.flagPoleGeo, this.poleMat);
-    pole.position.set(x, y + 2, -d);
-    const flag = new THREE.Mesh(this.flagGeo, pick(this.flagMats));
-    flag.position.set(x - Math.sign(x) * 0.9, y + 3.4, -d);
-    flag.rotation.y = Math.PI / 2;
-    this.scene.add(pole, flag);
-    seg.objects.push(pole, flag);
-  }
-
-  addScenery(seg, d0, d1) {
-    for (let d = d0 + rand(0, 10); d < d1; d += rand(9, 18)) {
-      for (const side of [-1, 1]) {
-        if (Math.random() < 0.3) continue;
-        const x = side * rand(WALL_X + 5, 70);
-        const s = rand(0.7, 1.4);
-        const trunk = new THREE.Mesh(this.trunkGeo, this.trunkMat);
-        trunk.position.set(x, 1.5 * s, -d);
-        trunk.scale.setScalar(s);
-        const leaves = new THREE.Mesh(this.leafGeo, pick(this.leafMats));
-        leaves.position.set(x, 6 * s, -d);
-        leaves.scale.setScalar(s);
-        this.scene.add(trunk, leaves);
-        seg.objects.push(trunk, leaves);
-      }
-    }
-    // Floating balloons next to the track.
-    for (let d = d0 + rand(10, 40); d < d1; d += rand(30, 60)) {
-      const side = Math.random() < 0.5 ? -1 : 1;
-      const g = new THREE.Group();
-      const b = new THREE.Mesh(this.balloonGeo, pick(this.balloonMats));
-      const str = new THREE.Mesh(this.stringGeo, this.stringMat);
-      str.position.y = -3.6;
-      g.add(b, str);
-      const y = rand(6, 14);
-      g.position.set(side * rand(WALL_X + 3, WALL_X + 12), y, -d);
-      this.scene.add(g);
-      seg.objects.push(g);
-      seg.balloons.push({ mesh: g, baseY: y, phase: Math.random() * 6 });
-    }
-    // Puffy clouds.
-    if (Math.random() < 0.8) {
-      const g = new THREE.Group();
-      for (let i = 0; i < 4; i++) {
-        const c = new THREE.Mesh(this.cloudGeo, this.cloudMat);
-        c.position.set(i * 7 - 10, rand(-1, 2), rand(-3, 3));
-        c.scale.setScalar(rand(0.8, 1.3));
-        g.add(c);
-      }
-      g.position.set(pick([-1, 1]) * rand(50, 110), rand(35, 60), -rand(d0, d1));
-      this.scene.add(g);
-      seg.objects.push(g);
-    }
-  }
-
   disposeSegment(seg) {
+    for (const st of seg.stars) this.stars.release(st.i);
     for (const o of seg.objects) this.scene.remove(o);
     for (const g of seg.geometries) g.dispose();
   }
@@ -348,51 +375,90 @@ export class World {
     this.features = this.features.filter((f) => f.d1 > minD);
 
     // Keep the endless ground under the truck (snapped so textures don't slide).
-    const z = Math.round(truck.pos.z / SNAP) * SNAP - 200;
+    const z = Math.round(truck.pos.z / TILE) * TILE - 200;
     this.floor.position.z = z;
-    this.grass.position.z = z;
-    for (const w of this.walls) w.position.z = z;
+    this.walls.position.z = Math.round(truck.pos.z / WALL_SNAP) * WALL_SNAP - 200;
 
     const events = [];
+    // Entering a new biome: tell the sky, and tint the arena dirt to match.
+    const here = this.segments.find((sg) => truckD >= sg.start && truckD < sg.end);
+    if (here && here.biome !== this.currentBiome) {
+      this.currentBiome = here.biome;
+      this.floorTint.set(BIOMES[here.biome].floor);
+      events.push({ type: 'biome', biome: here.biome });
+    }
+    this.floor.material.color.lerp(this.floorTint, 1 - Math.exp(-dt * 1.5));
+    this.scenery.update(this.segments);
     const now = performance.now() / 1000;
+    const scale = truck.scale;
     const center = truck.mesh.position;
-    const cy = truck.pos.y + 2;
+    const cy = truck.pos.y + 2 * scale;
+    const grab = (4 * scale) ** 2;
+    const magnet = truck.powers.magnet > 0;
     for (const seg of this.segments) {
       for (const s of seg.stars) {
+        if (s.gone) continue;
+        const p = s.pos;
         if (s.taken) {
+          // Pop: grow a little, then shrink away while floating up.
           s.t += dt;
-          s.mesh.scale.setScalar(Math.max(0, 1 + s.t * 4 - s.t * s.t * 30));
-          s.mesh.position.y += dt * 10;
-          if (s.t > 0.4) s.mesh.visible = false;
-          continue;
-        }
-        s.mesh.rotation.y += dt * 3;
-        s.mesh.position.y = s.baseY + Math.sin(now * 3 + s.baseY) * 0.3;
-        const dx = s.mesh.position.x - center.x;
-        const dy = s.mesh.position.y - cy;
-        const dz = s.mesh.position.z - truck.pos.z;
-        if (dx * dx + dy * dy + dz * dz < 4 * 4) {
-          s.taken = true;
-          events.push({ type: 'star', pos: s.mesh.position.clone() });
-        }
-      }
-      for (const c of seg.cars) {
-        if (c.crushed) {
-          if (c.t < 1) {
-            c.t = Math.min(1, c.t + dt * 8);
-            c.mesh.scale.set(1 + c.t * 0.25, 1 - c.t * 0.72, 1 + c.t * 0.1);
-            c.mesh.rotation.z = c.t * c.tilt;
+          p.y += dt * 10;
+          if (s.t > 0.4) {
+            s.gone = true;
+            this.stars.hide(s.i);
+          } else {
+            this.stars.place(s.i, p, s.rot, Math.max(0, 1 + s.t * 4 - s.t * s.t * 30));
           }
           continue;
         }
-        if (Math.abs(c.x - truck.pos.x) < 2.9 && Math.abs(c.d - truckD) < 3.8 && truck.pos.y < 2.2) {
-          c.crushed = true;
-          c.tilt = rand(-0.2, 0.2);
-          events.push({ type: 'crush', pos: c.mesh.position.clone() });
+        s.rot += dt * 3;
+        _to.set(center.x - p.x, cy - p.y, truck.pos.z - p.z);
+        const dist2 = _to.lengthSq();
+        if (magnet && dist2 < 30 * 30) {
+          // Stars fly to the truck.
+          s.pulled = true;
+          p.addScaledVector(_to, Math.min(1, dt * 6));
+        } else if (!s.pulled) {
+          p.y = s.baseY + Math.sin(now * 3 + s.baseY) * 0.3;
+        }
+        if (dist2 < grab) {
+          s.taken = true;
+          events.push({ type: 'star', pos: p.clone() });
+        }
+        this.stars.place(s.i, p, s.rot, 1);
+      }
+      for (const u of seg.pickups) {
+        if (u.taken) {
+          if (!u.mesh.visible) continue;
+          u.t += dt;
+          u.mesh.scale.setScalar(Math.max(0, 1 + u.t * 3 - u.t * u.t * 20));
+          if (u.t > 0.4) u.mesh.visible = false;
+          continue;
+        }
+        u.mesh.position.y = u.baseY + Math.sin(now * 2 + u.phase) * 0.35;
+        const [r1, r2] = u.mesh.userData.rings;
+        r1.rotation.y += dt * 2;
+        r2.rotation.z += dt * 2.6;
+        const p = u.mesh.position;
+        _to.set(center.x - p.x, cy - p.y, truck.pos.z - p.z);
+        if (_to.lengthSq() < (4.8 * scale) ** 2) {
+          u.taken = true;
+          events.push({ type: 'power', kind: u.kind, pos: p.clone() });
         }
       }
-      for (const b of seg.balloons) {
-        b.mesh.position.y = b.baseY + Math.sin(now * 1.5 + b.phase) * 0.8;
+      for (const c of seg.crushables) {
+        if (c.crushed) {
+          animateCrush(c, dt);
+          continue;
+        }
+        if (
+          Math.abs(c.x - truck.pos.x) < c.halfW + 2.0 * scale
+          && Math.abs(c.d - truckD) < c.halfL + 2.4 * scale
+          && truck.pos.y < c.top + 0.4
+        ) {
+          startCrush(c);
+          events.push({ type: 'crush', pos: c.mesh.position.clone(), points: c.points, kind: c.kind, debris: c.debris, glass: c.glass });
+        }
       }
     }
     return events;
