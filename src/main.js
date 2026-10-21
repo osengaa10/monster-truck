@@ -235,6 +235,8 @@ for (const ev of ['touchend', 'mouseup', 'keydown']) {
 // ---------- Events from the simulation ----------
 
 const EMOJI = ['🤩', '🔥', '🚀', '🌈', '💥', '🎉'];
+const BIG_CRUSH = new Set(['bus', 'rv', 'limo', 'stack']);
+const CRUSH_WORDS = { bus: 'KA-BOOM!', rv: 'KA-BOOM!', limo: 'SMASH!', stack: 'DOUBLE CRUNCH!', potty: 'BONK!', crates: 'SMASH!', hay: 'POOF!' };
 
 function handleEvent(ev) {
   switch (ev.type) {
@@ -282,19 +284,17 @@ function handleEvent(ev) {
       break;
     }
     case 'crush': {
-      sfx.crunch();
-      effects.dustBurst(ev.pos, 18, 7);
-      if (ev.glass) effects.glass(ev.pos);
-      effects.debris(ev.pos, ev.debris);
+      sfx.crush(ev.kind);
+      effects.crush(ev);
       truck.bump(5);
-      shake = Math.max(shake, 0.35);
+      shake = Math.max(shake, BIG_CRUSH.has(ev.kind) ? 0.7 : 0.4);
       if (!playing) break;
       // Crushing things one after another builds a combo.
       crushStreak = elapsed - lastCrush < 2 ? crushStreak + 1 : 1;
       lastCrush = elapsed;
       addStars(1);
       const mult = crushStreak * (truck.powers.magnet > 0 ? 2 : 1);
-      addPoints(ev.points * mult, ev.pos, mult > 1 ? '×' + mult : '', '#ff9f43');
+      addPoints(ev.points * mult, ev.pos, (CRUSH_WORDS[ev.kind] || 'CRUNCH!') + (mult > 1 ? ' ×' + mult : ''), '#ff9f43');
       break;
     }
     case 'star':
@@ -410,10 +410,14 @@ function updateCamera(dt) {
     shake = Math.max(0, shake - dt * 2);
   }
   camera.lookAt(camLook);
-  // Debugging aid: set window.__camOffset = new THREE.Vector3(...) to look at the truck from anywhere.
+  // Debugging aids: window.__camOffset (a Vector3) looks at the truck from that offset;
+  // window.__camAt = { pos, look } (Vector3s) parks the camera anywhere.
   if (window.__camOffset) {
     camera.position.copy(truck.pos).add(window.__camOffset);
     camera.lookAt(truck.pos.x, truck.pos.y + 2, truck.pos.z);
+  } else if (window.__camAt) {
+    camera.position.copy(window.__camAt.pos);
+    camera.lookAt(window.__camAt.look);
   }
 }
 

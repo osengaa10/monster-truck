@@ -133,6 +133,14 @@ export class Effects {
       160,
       { gravity: 22, drag: 0.4, grow: false, floor: true },
     );
+    // Tires and hubcaps that pop off crushed vehicles and bounce away.
+    this.discs = new Pool(
+      scene,
+      new THREE.CylinderGeometry(0.5, 0.5, 0.28, 16),
+      new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0.4 }),
+      40,
+      { gravity: 22, drag: 0.3, grow: false, floor: true },
+    );
     this.wowEl = document.getElementById('wow');
     this.popupLayer = document.getElementById('popups');
   }
@@ -150,8 +158,8 @@ export class Effects {
   }
 
   // Shattering windows when a car gets crushed.
-  glass(pos) {
-    for (let i = 0; i < 30; i++) {
+  glass(pos, n = 30) {
+    for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const r = 3 + Math.random() * 6;
       this.confetti.spawn(pos.x, pos.y + 1.6, pos.z, Math.cos(a) * r, 5 + Math.random() * 7, Math.sin(a) * r,
@@ -159,15 +167,48 @@ export class Effects {
     }
   }
 
-  // Bits flying off whatever got crushed (hubcaps, panels, splinters, straw).
-  debris(pos, colors = [0x777777]) {
-    for (let i = 0; i < 14; i++) {
+  // Bits flying off whatever got crushed: panels, trim, splinters.
+  debris(pos, colors = [0x777777], n = 14, size = 1) {
+    for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const r = 4 + Math.random() * 7;
       const color = i % 4 === 0 ? 0x1a1a1a : colors[(Math.random() * colors.length) | 0];
       this.chunks.spawn(pos.x, pos.y + 1.2, pos.z, Math.cos(a) * r, 6 + Math.random() * 8, Math.sin(a) * r,
-        color, 0.6 + Math.random() * 0.8, 1.6 + Math.random() * 0.8);
+        color, (0.6 + Math.random() * 0.9) * size, 1.6 + Math.random() * 0.8);
     }
+  }
+
+  // A tire or hubcap popping off and bouncing away.
+  disc(pos, color, size) {
+    const a = Math.random() * Math.PI * 2;
+    const r = 5 + Math.random() * 6;
+    this.discs.spawn(pos.x + Math.cos(a), pos.y + 0.6, pos.z + Math.sin(a), Math.cos(a) * r, 7 + Math.random() * 6, Math.sin(a) * r,
+      color, size, 2.2 + Math.random() * 0.8);
+  }
+
+  // Everything that happens visually when something gets squashed.
+  // ev: { pos, kind, debris (colors), glass }
+  crush(ev) {
+    const pos = ev.pos;
+    const big = ev.kind === 'bus' || ev.kind === 'rv' || ev.kind === 'limo' || ev.kind === 'stack';
+    if (ev.kind === 'hay') {
+      this.dustBurst(pos, 30, 8, [0xe8cf8a, 0xd9b25a, 0xf2e2b0]);
+      this.confettiBurst(pos, 120, 12, [0xd9b25a, 0xf0d890, 0xc49a40]);
+      return;
+    }
+    this.dustBurst(pos, big ? 34 : 22, big ? 10 : 7);
+    if (ev.kind === 'crates') {
+      this.debris(pos, ev.debris, 26, 0.9);
+      return;
+    }
+    this.debris(pos, ev.debris, big ? 26 : 16, big ? 1.4 : 1);
+    if (ev.kind === 'potty') return;
+    if (ev.glass) this.glass(pos, big ? 60 : 36);
+    this.sparks(pos, 14);
+    // A tire or two and a hubcap.
+    const tires = big ? 2 : Math.random() < 0.6 ? 1 : 0;
+    for (let i = 0; i < tires; i++) this.disc(pos, 0x1c1c1c, big ? 1.5 : 1.0);
+    if (Math.random() < 0.7) this.disc(pos, 0xc8ced4, 0.55);
   }
 
   // A grey puff from an exhaust stack.
@@ -187,8 +228,8 @@ export class Effects {
   }
 
   // Sparks when landing on a steel ramp.
-  sparks(pos) {
-    for (let i = 0; i < 40; i++) {
+  sparks(pos, n = 40) {
+    for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       const r = 6 + Math.random() * 10;
       this.glow.spawn(pos.x + (Math.random() - 0.5) * 3, pos.y + 0.3, pos.z + (Math.random() - 0.5) * 4,
@@ -201,13 +242,13 @@ export class Effects {
     this.confettiBurst(pos, 25, 9, [0xffdd00, 0xfff59d, 0xffffff]);
   }
 
-  dustBurst(pos, n = 14, spread = 4) {
+  dustBurst(pos, n = 14, spread = 4, colors = DUST_COLORS) {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
       this.dust.spawn(
         pos.x + Math.cos(a) * 1.5, pos.y + 0.5 + Math.random(), pos.z + Math.sin(a) * 1.5,
         Math.cos(a) * spread * Math.random(), 1 + Math.random() * 3, Math.sin(a) * spread * Math.random(),
-        DUST_COLORS[(Math.random() * DUST_COLORS.length) | 0], 0.9 + Math.random() * 0.8, 0.8 + Math.random() * 0.6,
+        colors[(Math.random() * colors.length) | 0], 0.9 + Math.random() * 0.8, 0.8 + Math.random() * 0.6,
       );
     }
   }
@@ -280,5 +321,6 @@ export class Effects {
     this.dust.update(dt, camera);
     this.glow.update(dt, camera);
     this.chunks.update(dt, camera);
+    this.discs.update(dt, camera);
   }
 }

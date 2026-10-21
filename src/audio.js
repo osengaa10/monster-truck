@@ -149,21 +149,86 @@ export class Sfx {
     o2.stop(t + 0.3);
   }
 
-  crunch() {
+  // A short burst of filtered noise (one "grain" of a crunch or crack).
+  grain(start, freq, q, peak, length, type = 'bandpass') {
+    const g = this.gain();
+    this.env(g, start, peak, 0.002, length);
+    const n = this.noiseSrc(this.filter(type, freq, g, q));
+    n.start(start, Math.random());
+    n.stop(start + length + 0.05);
+  }
+
+  // A falling sine "thump" for weight.
+  thump(start, from, to, peak, length) {
+    const g = this.gain();
+    this.env(g, start, peak, 0.004, length);
+    const o = this.osc('sine', from, g);
+    o.frequency.exponentialRampToValueAtTime(to, start + length);
+    o.start(start);
+    o.stop(start + length + 0.05);
+  }
+
+  // Squashing something, with a sound to match what it's made of.
+  crush(kind) {
     if (!this.ctx) return;
     const t = this.t;
+    const r = Math.random;
+    if (kind === 'hay') {
+      // Soft whump and a rustle of straw.
+      this.thump(t, 140, 50, 0.5, 0.25);
+      this.grain(t, 350, 0.7, 0.35, 0.3, 'lowpass');
+      for (let i = 0; i < 8; i++) this.grain(t + 0.03 + r() * 0.35, 3000 + r() * 3000, 1, 0.08, 0.06, 'highpass');
+      return;
+    }
+    if (kind === 'crates') {
+      // Thump and a run of sharp wood cracks.
+      this.thump(t, 160, 60, 0.6, 0.2);
+      for (let i = 0; i < 6; i++) this.grain(t + i * 0.035 + r() * 0.02, 1400 + r() * 1400, 1.5, 0.45, 0.025);
+      this.grain(t + 0.02, 600, 2, 0.3, 0.15);
+      return;
+    }
+    if (kind === 'potty') {
+      // A hollow plastic BONK.
+      this.thump(t, 260, 120, 0.6, 0.3);
+      const g = this.gain();
+      this.env(g, t, 0.25, 0.003, 0.35);
+      const o = this.osc('triangle', 330, this.filter('bandpass', 500, g, 6));
+      o.frequency.exponentialRampToValueAtTime(180, t + 0.3);
+      o.start(t);
+      o.stop(t + 0.4);
+      this.grain(t, 2000, 1, 0.3, 0.05);
+      return;
+    }
+    // Vehicles: a heavy thump, crumpling sheet metal, a bending groan and
+    // shattering glass. Big ones are deeper and last longer.
+    const heavy = kind === 'bus' || kind === 'rv' || kind === 'limo' || kind === 'stack';
+    const len = heavy ? 1.5 : 1;
+    this.thump(t, heavy ? 90 : 120, heavy ? 28 : 38, 0.8, 0.35 * len);
+    if (heavy) this.thump(t + 0.12, 70, 30, 0.5, 0.3);
+    const grains = heavy ? 16 : 10;
+    for (let i = 0; i < grains; i++) {
+      this.grain(t + (i / grains) * 0.28 * len + r() * 0.02, (heavy ? 600 : 900) + r() * 2200, 3 + r() * 4, 0.35 + r() * 0.25, 0.02 + r() * 0.03);
+    }
+    this.grain(t, 1200, 0.8, 0.45, 0.18 * len); // the main crunch body
+    // Sheet metal groaning as it bends.
     const g = this.gain();
-    this.env(g, t, 0.6, 0.005, 0.3);
-    const bp = this.filter('bandpass', 1400, g, 0.7);
-    const n = this.noiseSrc(bp);
-    n.start(t, Math.random());
-    n.stop(t + 0.35);
-    const g2 = this.gain();
-    this.env(g2, t, 0.5, 0.005, 0.2);
-    const o = this.osc('square', 90, this.filter('lowpass', 400, g2));
-    o.frequency.exponentialRampToValueAtTime(40, t + 0.2);
-    o.start(t);
-    o.stop(t + 0.25);
+    this.env(g, t + 0.03, 0.18, 0.04, 0.3 * len);
+    const o = this.osc('sawtooth', heavy ? 140 : 200, this.filter('bandpass', heavy ? 450 : 650, g, 5));
+    o.frequency.exponentialRampToValueAtTime(heavy ? 55 : 80, t + 0.35 * len);
+    o.start(t + 0.03);
+    o.stop(t + 0.45 * len);
+    // Glass: a bright smash, then tinkling bits.
+    if (kind !== 'junker') {
+      this.grain(t + 0.02, 5000, 0.8, 0.3, 0.12, 'highpass');
+      for (let i = 0; i < 9; i++) {
+        const start = t + 0.04 + r() * 0.4;
+        const tg = this.gain();
+        this.env(tg, start, 0.05 + r() * 0.05, 0.002, 0.05 + r() * 0.08);
+        const ping = this.osc('sine', 2500 + r() * 4000, tg);
+        ping.start(start);
+        ping.stop(start + 0.16);
+      }
+    }
   }
 
   thud(strength = 1) {

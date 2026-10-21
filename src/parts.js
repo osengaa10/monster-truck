@@ -51,9 +51,16 @@ export const MATERIAL = makeMaterial();
 
 // Collects lots of small colored shapes and merges them into one geometry,
 // so a detailed model is still a single mesh and a single draw call.
+// `detail` (a spacing, 0 for none) splits long boxes and cylinders into
+// segments so models that get crushed can bend everywhere, not just at corners.
 export class Parts {
-  constructor() {
+  constructor({ detail = 0 } = {}) {
     this.geos = [];
+    this.detail = detail;
+  }
+
+  segs(len) {
+    return this.detail ? Math.max(1, Math.round(len / this.detail)) : 1;
   }
 
   add(geo, color, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) {
@@ -82,27 +89,39 @@ export class Parts {
   }
 
   box(w, h, d, color, x, y, z, rx, ry, rz) {
-    return this.add(new THREE.BoxGeometry(w, h, d), color, x, y, z, rx, ry, rz);
+    return this.add(new THREE.BoxGeometry(w, h, d, this.segs(w), this.segs(h), this.segs(d)), color, x, y, z, rx, ry, rz);
   }
 
   // Cylinder lying along the X axis (like a wheel or axle).
   xcyl(r, len, seg, color, x, y, z) {
-    return this.add(new THREE.CylinderGeometry(r, r, len, seg), color, x, y, z, 0, 0, Math.PI / 2);
+    return this.add(new THREE.CylinderGeometry(r, r, len, seg, this.segs(len)), color, x, y, z, 0, 0, Math.PI / 2);
   }
 
   // Upright cylinder.
   ycyl(r, len, seg, color, x, y, z, rx, ry, rz) {
-    return this.add(new THREE.CylinderGeometry(r, r, len, seg), color, x, y, z, rx, ry, rz);
+    return this.add(new THREE.CylinderGeometry(r, r, len, seg, this.segs(len)), color, x, y, z, rx, ry, rz);
   }
 
   // A rounded solid made from a side outline. pts are [along, up] pairs going
   // counter-clockwise, with the front at +along (which becomes -z). It is
   // `width` wide across x, centered on x.
-  profile(pts, width, color, { x = 0, y = 0, z = 0, bevel = 0.08 } = {}) {
-    const shape = new THREE.Shape(pts.map(([a, b]) => new THREE.Vector2(a, b)));
+  // `detail` (a spacing) adds extra vertices along the outline and across the
+  // width, so the panels have something to bend when they get crushed.
+  profile(pts, width, color, { x = 0, y = 0, z = 0, bevel = 0.08, detail = 0 } = {}) {
+    let outline = pts;
+    if (detail) {
+      outline = [];
+      pts.forEach((a, i) => {
+        const b = pts[(i + 1) % pts.length];
+        const n = Math.max(1, Math.round(Math.hypot(b[0] - a[0], b[1] - a[1]) / detail));
+        for (let k = 0; k < n; k++) outline.push([a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n]);
+      });
+    }
+    const shape = new THREE.Shape(outline.map(([a, b]) => new THREE.Vector2(a, b)));
     const depth = Math.max(0.01, width - bevel * 2);
     const g = new THREE.ExtrudeGeometry(shape, {
-      depth, bevelEnabled: bevel > 0, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 2, curveSegments: 4,
+      depth, steps: detail ? Math.max(1, Math.round(depth / (detail * 1.5))) : 1,
+      bevelEnabled: bevel > 0, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 2, curveSegments: 4,
     });
     g.translate(0, 0, -depth / 2);
     g.rotateY(Math.PI / 2);

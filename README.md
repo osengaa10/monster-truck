@@ -11,7 +11,7 @@ A big, bouncy monster truck game made for a 4-year-old. You can't lose: there's 
   - Swipe up for a backflip, down for a front flip, left or right for a barrel roll. Swipe like crazy for crazy stunts. Swiping or holding the other way reverses the spin right away.
   - The truck always lands on its wheels.
 - **On the ground:** swipe up to hop.
-- Crush cars, vans, pickups, limos, RVs, school buses, car stacks, port-a-potties, crates and hay bales.
+- Crush cars, vans, pickups, limos, RVs, school buses, car stacks, port-a-potties, crates and hay bales. Roofs cave in, windows shatter, tires and hubcaps fly off, and each one sounds like what it is made of.
 - Grab glowing power-ups (they start on their own, and a ring next to the ⭐ shows how long is left):
   - 🔥 **Nitro**: flames, more speed, and higher jumps.
   - 🌙 **Moon gravity**: super floaty jumps.

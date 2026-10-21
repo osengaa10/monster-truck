@@ -3,23 +3,22 @@
 // a points value, and knows how to show itself crushed.
 import * as THREE from '../vendor/three.module.min.js';
 import { Parts, mat, MATERIAL } from './parts.js';
-import { makeVehicle, crushGeometry, CAR_COLORS, CAR_KINDS, VEHICLE_POINTS } from './cars.js';
+import { makeVehicle, keepDetailed, addCrushTargets, CAR_COLORS, CAR_KINDS, VEHICLE_POINTS } from './cars.js';
 
 const rand = (a, b) => a + Math.random() * (b - a);
 const randColor = () => (Math.random() * CAR_COLORS.length) | 0;
 
 function propModel(build) {
-  const p = new Parts();
+  const p = new Parts({ detail: 0.5 });
   const size = build(p);
-  const geo = p.build();
-  return { geo, crushed: crushGeometry(geo, size.height, 3), size };
+  return { geo: addCrushTargets(p.build(), size, 3), size };
 }
 
 const PROPS = {
   potty: () => propModel((p) => {
     const BLUE = 0x1f6fd1;
-    p.box(1.3, 2.2, 1.3, BLUE, 0, 1.1, 0);
-    p.box(1.4, 0.15, 1.4, 0xf2f2f2, 0, 2.28, 0);
+    p.add(new THREE.BoxGeometry(1.3, 2.2, 1.3, 4, 8, 4), BLUE, 0, 1.1, 0);
+    p.add(new THREE.BoxGeometry(1.4, 0.15, 1.4, 4, 1, 4), 0xf2f2f2, 0, 2.28, 0);
     p.box(1.0, 1.8, 0.04, 0x1a5cb0, 0, 1.05, -0.67); // door
     p.box(0.25, 0.25, 0.02, mat(0xfff3a0, 'light'), 0, 1.75, -0.7); // little moon window
     p.box(0.08, 0.3, 0.06, mat(0xd8dde3, 'chrome'), 0.35, 1.0, -0.71);
@@ -106,27 +105,55 @@ export function makeCrushable(kind, x, d, { across = false } = {}) {
   };
 }
 
-// Swap in the squashed models and press them down over a moment.
+// How a crush plays out (seconds): the roof caves in, then it pancakes with a
+// little overshoot, while the whole thing jolts, gets shoved and tips over.
+const DENT_TIME = 0.07;
+const FLAT_TIME = 0.3;
+const SETTLE_TIME = 0.55;
+const smooth = (t) => t * t * (3 - 2 * t);
+
 export function startCrush(c) {
   c.crushed = true;
   c.t = 0;
   for (const p of c.parts) {
-    p.mesh.geometry = p.model.crushed;
     p.y0 = p.mesh.position.y;
-    p.mesh.scale.y = 2.2; // starts tall and gets pressed flat
+    keepDetailed(p.mesh);
+    p.morph = p.mesh.userData.mesh || p.mesh; // vehicles are LODs; the detailed mesh squashes
   }
-  c.tilt = rand(-0.12, 0.12);
+  c.tiltZ = rand(-0.14, 0.14);
+  c.tiltX = rand(-0.06, 0.06);
+  c.shove = rand(0.3, 0.7);
+  c.z0 = c.mesh.position.z;
 }
 
 export function animateCrush(c, dt) {
-  if (c.t >= 1) return;
-  c.t = Math.min(1, c.t + dt * 7);
-  const e = 1 - (1 - c.t) * (1 - c.t);
+  if (c.t >= SETTLE_TIME) return;
+  c.t = Math.min(SETTLE_TIME, c.t + dt);
+  const t = c.t;
+  let dent;
+  let flat;
+  if (t < DENT_TIME) {
+    dent = smooth(t / DENT_TIME);
+    flat = 0;
+  } else if (t < FLAT_TIME) {
+    const k = smooth((t - DENT_TIME) / (FLAT_TIME - DENT_TIME));
+    dent = 1 - k;
+    flat = k * 1.12;
+  } else {
+    dent = 0;
+    flat = 1.12 - 0.12 * smooth((t - FLAT_TIME) / (SETTLE_TIME - FLAT_TIME));
+  }
+  const e = smooth(Math.min(1, t / FLAT_TIME));
   for (const p of c.parts) {
-    p.mesh.scale.y = 2.2 + (1 - 2.2) * e;
+    p.morph.morphTargetInfluences[0] = dent;
+    p.morph.morphTargetInfluences[1] = flat;
     p.mesh.position.y = p.y0 + (p.y1 - p.y0) * e;
   }
-  c.mesh.rotation.z = c.tilt * e;
+  // Jolt down and bounce, get shoved forward, and tip a little.
+  c.mesh.position.y = -0.12 * Math.sin(Math.min(1, t / 0.12) * Math.PI) + 0.1 * Math.sin(Math.max(0, t - 0.12) * 18) * Math.exp(-t * 8);
+  c.mesh.position.z = c.z0 - c.shove * e;
+  c.mesh.rotation.z = c.tiltZ * e;
+  c.mesh.rotation.x = c.tiltX * e;
 }
 
 export { CAR_KINDS };

@@ -1,6 +1,6 @@
 // Offline support: serve from cache, refresh the cache in the background.
 // A new version of the game shows up on the next launch after an update.
-const CACHE = 'monster-truck-v4';
+const CACHE = 'monster-truck-v5';
 const FILES = [
   './',
   'index.html',
